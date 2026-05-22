@@ -1,0 +1,7 @@
+packages:
+  - 'packages/*'
+  - 'services/*'
+allowBuilds:
+  '@google/genai': true
+  bcrypt: true
+  protobufjs: true

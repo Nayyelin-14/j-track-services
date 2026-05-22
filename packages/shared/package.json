@@ -1,0 +1,40 @@
+{
+  "name": "@jtrack/shared",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./db": "./dist/db.js",
+    "./token": "./dist/token.js",
+    "./cookies": "./dist/cookies.js",
+    "./buffer": "./dist/buffer.js",
+    "./errorHandler": "./dist/errorHandler.js",
+    "./tryCatch": "./dist/tryCatch.js",
+    "./isauthenticated": "./dist/isauthenticated.js",
+    "./kafka/producer": "./dist/kafka/producer.js",
+    "./kafka/topic": "./dist/kafka/topic.js",
+    "./kafka/types": "./dist/kafka/types.js",
+    "./redis/helpers": "./dist/redis/helpers.js"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.1.0",
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "datauri": "^4.1.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "kafkajs": "^2.2.4"
+  }
+}

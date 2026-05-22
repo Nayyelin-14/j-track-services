@@ -1,0 +1,22 @@
+{
+  "name": "j-track-services",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:shared": "pnpm --filter @jtrack/shared build",
+    "dev": "pnpm -r --parallel dev",
+    "dev:auth": "pnpm --filter auth dev",
+    "dev:job": "pnpm --filter jobservice dev",
+    "dev:user": "pnpm --filter user dev",
+    "dev:utils": "pnpm --filter utils dev",
+    "start": "pnpm -r start",
+    "test": "pnpm -r test",
+    "clean": "pnpm -r exec rm -rf dist node_modules",
+    "lint": "pnpm -r exec tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
