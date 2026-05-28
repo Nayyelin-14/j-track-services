@@ -366,7 +366,7 @@ export const changePassword = TryCatch(async (req: Request, res: Response) => {
     WHERE user_id = ${user_id}
     LIMIT 1
   `;
-
+  console.log()
   if (!user) throw new ErrorHandler(404, "User not found");
 
   const isMatch = await bcrypt.compare(currentPassword, user.password);
