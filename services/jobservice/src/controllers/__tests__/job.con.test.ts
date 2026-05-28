@@ -36,7 +36,7 @@ vi.mock("../../utils/template", () => ({
 
 process.env.UTILS_SERVICE_URL = "http://utils:6001/api/utils";
 
-const MODULES = await import("../job.con");
+const MODULES = await import("../index");
 
 function mockReq(overrides: Record<string, unknown> = {}) {
   return {
@@ -123,8 +123,9 @@ describe("getCompanyById", () => {
       res,
       next,
     );
-    expect(next).toHaveBeenCalledWith(
-      expect.objectContaining({ statusCode: 404 }),
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, message: expect.stringMatching(/not found/i) }),
     );
   });
   it("returns company", async () => {

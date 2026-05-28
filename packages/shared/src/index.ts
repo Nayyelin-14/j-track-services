@@ -8,4 +8,5 @@ export { isAuthenticated } from "./isauthenticated";
 export { getKafkaProducer } from "./kafka/producer";
 export { ensureTopic, listTopics } from "./kafka/topic";
 export type { MailMessage, KafkaHealth, ProducerInstance } from "./kafka/types";
-export { createRedisHelpers } from "./redis/helpers";
+export { createRedisHelpers, withCache } from "./redis/helpers";
+export type { RedisClient } from "./redis/helpers";

@@ -17,11 +17,11 @@ vi.mock("@jtrack/shared/errorHandler", () => ({
   },
 }));
 vi.mock("@jtrack/shared/buffer", () => ({ getBuffer: mockGetBuffer }));
-vi.mock("../../index", () => ({
+vi.mock("../../redis", () => ({
   redisClient: { get: mockRedisGet, setEx: mockRedisSetEx },
 }));
 
-const MODULES = await import("../user.controller");
+const MODULES = await import("../index");
 
 function mockReq(overrides: Record<string, unknown> = {}) {
   return { body: {}, params: {}, file: undefined, on: vi.fn(), ...overrides } as any;
@@ -61,7 +61,7 @@ describe("getUserById", () => {
     mockRedisGet.mockResolvedValueOnce(JSON.stringify({ user_id: 1, name: "A" }));
     const res = mockRes();
     await MODULES.getUserById(mockReq({ params: { id: "1" } }), res);
-    expect(res.json).toHaveBeenCalledWith({ success: true, user: expect.any(Object) });
+    expect(res.json).toHaveBeenCalledWith({ success: true, user: expect.any(Object), fromCache: true });
   });
   it("fetches and caches user from db", async () => {
     mockRedisGet.mockResolvedValueOnce(null);
