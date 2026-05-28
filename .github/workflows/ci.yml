@@ -129,6 +129,16 @@ jobs:
           node-version: 20
           cache: pnpm
 
+      - name: Cache pnpm node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            packages/shared/node_modules
+            services/*/node_modules
+          key: modules-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: modules-
+
       - run: pnpm install --frozen-lockfile
 
       - name: Cache shared build
@@ -156,6 +166,13 @@ jobs:
       - if: needs.changes.outputs[matrix.service.name] == 'true'
         name: Test ${{ matrix.service.name }}
         run: pnpm --filter ${{ matrix.service.name }} test -- --run --coverage
+
+      - if: always() && needs.changes.outputs[matrix.service.name] == 'true'
+        name: Upload coverage ${{ matrix.service.name }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.service.name }}
+          path: ${{ matrix.service.dir }}/coverage/
 
       - if: needs.changes.outputs[matrix.service.name] == 'true'
         name: Build Docker image
