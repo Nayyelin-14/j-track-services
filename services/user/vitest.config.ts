@@ -8,7 +8,6 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
-      include: ["src/services/match.ts", "src/validators/match.ts", "src/controllers/match.ts"],
     },
   },
 });

@@ -1,0 +1,176 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  DB_URL: ${{ secrets.DB_URL }}
+  REDIS_URL: redis://localhost:6379
+  KAFKA_BROKER: localhost:9092
+  UTILS_SERVICE_URL: http://localhost:6001/api/utils
+  FRONTEND_URL: http://localhost:3000
+  JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+  JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+  JWT_RESET_SECRET: ${{ secrets.JWT_RESET_SECRET }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      auth: ${{ steps.filter.outputs.auth }}
+      user: ${{ steps.filter.outputs.user }}
+      jobservice: ${{ steps.filter.outputs.jobservice }}
+      utils: ${{ steps.filter.outputs.utils }}
+      shared: ${{ steps.filter.outputs.shared }}
+      any: ${{ steps.filter.outputs.any }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            shared:
+              - 'packages/shared/**'
+            auth:
+              - 'services/auth/**'
+              - 'packages/shared/**'
+            user:
+              - 'services/user/**'
+              - 'packages/shared/**'
+            jobservice:
+              - 'services/jobservice/**'
+              - 'packages/shared/**'
+            utils:
+              - 'services/utils/**'
+              - 'packages/shared/**'
+            any:
+              - 'services/**'
+              - 'packages/**'
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - { name: auth, dir: services/auth }
+          - { name: user, dir: services/user }
+          - { name: jobservice, dir: services/jobservice }
+          - { name: utils, dir: services/utils }
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: jtrack
+          POSTGRES_USER: jtrack
+          POSTGRES_PASSWORD: jtrack123
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jtrack"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      kafka:
+        image: apache/kafka:4.2.0
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-topics.sh --list --bootstrap-server localhost:9092"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Cache shared build
+        uses: actions/cache@v4
+        with:
+          path: packages/shared/dist
+          key: shared-${{ hashFiles('packages/shared/src/**') }}
+          restore-keys: shared-
+
+      - name: Build shared library
+        run: pnpm --filter @jtrack/shared build
+
+      - if: needs.changes.outputs[matrix.service.name] == 'true'
+        name: Build ${{ matrix.service.name }}
+        run: pnpm --filter ${{ matrix.service.name }} build
+
+      - if: needs.changes.outputs[matrix.service.name] == 'true'
+        name: Lint ${{ matrix.service.name }}
+        run: pnpm --filter ${{ matrix.service.name }} lint
+
+      - if: needs.changes.outputs[matrix.service.name] == 'true'
+        name: Type-check ${{ matrix.service.name }}
+        run: pnpm --filter ${{ matrix.service.name }} exec tsc --noEmit
+
+      - if: needs.changes.outputs[matrix.service.name] == 'true'
+        name: Test ${{ matrix.service.name }}
+        run: pnpm --filter ${{ matrix.service.name }} test -- --run --coverage
+
+      - if: needs.changes.outputs[matrix.service.name] == 'true'
+        name: Build Docker image
+        run: docker build -t ${{ matrix.service.name }}:ci ${{ matrix.service.dir }}
+
+  ci-passed:
+    if: always()
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check build result
+        run: |
+          result="${{ needs.build.result }}"
+          if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+            echo "CI failed (result: $result)"
+            exit 1
+          fi
+          echo "CI passed"

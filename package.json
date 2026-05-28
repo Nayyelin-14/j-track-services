@@ -2,6 +2,7 @@
   "name": "j-track-services",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "pnpm -r build",
     "build:shared": "pnpm --filter @jtrack/shared build",
@@ -13,10 +14,24 @@
     "start": "pnpm -r start",
     "test": "pnpm -r test",
     "clean": "pnpm -r exec rm -rf dist node_modules",
-    "lint": "pnpm -r exec tsc --noEmit"
+    "lint": "pnpm -r exec tsc --noEmit",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:build:auth": "docker compose build auth",
+    "docker:build:user": "docker compose build user",
+    "docker:build:job": "docker compose build jobservice",
+    "docker:build:utils": "docker compose build utils",
+    "docker:restart": "docker compose down && docker compose up -d"
   },
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.4.0",
+    "typescript-eslint": "^8.60.0"
   }
 }

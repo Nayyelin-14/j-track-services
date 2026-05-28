@@ -3,16 +3,10 @@ import { v2 as cloudinary } from "cloudinary";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME!,
-  api_key: process.env.CLOUDINARY_API_KEY!,
-  api_secret: process.env.CLOUDINARY_API_SECRET!,
-});
-
 const router = Router();
 
 const MAX_BASE64_SIZE = 10 * 1024 * 1024;
-const PUBLIC_ID_REGEX = /^[\w\-\/]+$/;
+const PUBLIC_ID_REGEX = /^[\w/-]+$/;
 
 router.post(
   "/upload",
