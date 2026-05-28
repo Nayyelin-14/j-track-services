@@ -19,6 +19,12 @@ const mockDel = vi.fn();
 const mockGet = vi.fn();
 const mockSet = vi.fn();
 const mockTrackFailed = vi.fn();
+const mockWithCache = vi.fn(
+  async (_client: any, _key: string, _ttl: number, fetch: () => Promise<unknown>) => {
+    const data = await fetch();
+    return { data, fromCache: false };
+  },
+);
 
 vi.mock("bcrypt", () => ({
   default: { compare: mockBcryptCompare, hash: mockBcryptHash, genSalt: vi.fn() },
@@ -58,6 +64,7 @@ vi.mock("@jtrack/shared/redis/helpers", () => ({
     setRedisValue: mockSet,
     trackFailedResetAttempt: mockTrackFailed,
   }),
+  withCache: mockWithCache,
 }));
 vi.mock("../../redis", () => ({
   redisClient: { get: mockRedisGet, set: mockRedisSet, del: mockRedisDel },

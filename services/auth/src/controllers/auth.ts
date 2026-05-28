@@ -13,7 +13,7 @@ import { accessCookieOptions, refreshCookieOptions } from "@jtrack/shared/cookie
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import { getBuffer } from "@jtrack/shared/buffer";
 import { kafka } from "../kafka.js";
-import { createRedisHelpers } from "@jtrack/shared/redis/helpers";
+import { createRedisHelpers, withCache } from "@jtrack/shared/redis/helpers";
 import { redisClient } from "../redis.js";
 import { resetPasswordEmailTemplate } from "../template.js";
 
@@ -190,30 +190,36 @@ export const getMe = TryCatch(async (req: Request, res: Response) => {
     throw new ErrorHandler(401, "Unauthorized");
   }
 
-  const [user] = await sql`
-    SELECT
-      user_id,
-      name,
-      email,
-      role,
-      phone_number,
-      bio,
-      resume,
-      profile_pic,
-      created_at
-    FROM users
-    WHERE user_id = ${userData.user_id}
-    LIMIT 1
-  `;
+  const { data: user, fromCache } = await withCache(
+    redisClient,
+    `auth:user:${userData.user_id}`,
+    300,
+    async () => {
+      const [user] = await sql`
+        SELECT
+          user_id,
+          name,
+          email,
+          role,
+          phone_number,
+          bio,
+          resume,
+          profile_pic,
+          created_at
+        FROM users
+        WHERE user_id = ${userData.user_id}
+        LIMIT 1
+      `;
 
-  if (!user) {
-    throw new ErrorHandler(404, "User not found");
-  }
+      if (!user) {
+        throw new ErrorHandler(404, "User not found");
+      }
 
-  return res.json({
-    success: true,
-    user,
-  });
+      return user;
+    },
+  );
+
+  return res.json({ success: true, user, ...(fromCache && { fromCache }) });
 });
 
 export const RESET_TOKEN_PREFIX = "reset:";
@@ -366,7 +372,6 @@ export const changePassword = TryCatch(async (req: Request, res: Response) => {
     WHERE user_id = ${user_id}
     LIMIT 1
   `;
-  console.log()
   if (!user) throw new ErrorHandler(404, "User not found");
 
   const isMatch = await bcrypt.compare(currentPassword, user.password);

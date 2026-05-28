@@ -5,12 +5,16 @@ import {
   getUserById,
   updateUser,
   updateBio,
+} from "../controllers/profile.controller.js";
+import {
   uploadProfilePic,
   uploadResume,
+} from "../controllers/uploads.controller.js";
+import {
   addSkills,
   removeSkills,
   getAllSkills,
-} from "../controllers/user.controller.js";
+} from "../controllers/skills.controller.js";
 import { isAuthenticated } from "@jtrack/shared/isauthenticated";
 const router = Router();
 

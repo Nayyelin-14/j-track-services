@@ -7,16 +7,20 @@ import {
   getAllCompanies,
   getCompanyById,
   getCompanyDetail,
+} from "../controllers/companies.controller.js";
+import {
   createJob,
   deleteJob,
   updateJob,
   getAllActiveJobs,
   getJobById,
+} from "../controllers/jobs.controller.js";
+import {
   applyJob,
   getApplications,
   getApplicationsByRecruiterJob,
   updateJobApplication,
-} from "../controllers/job.con.js";
+} from "../controllers/applications.controller.js";
 import { analyzeJobMatch } from "../controllers/match.con.js";
 
 const router = Router();
