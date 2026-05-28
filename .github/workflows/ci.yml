@@ -159,7 +159,7 @@ jobs:
 
       - if: needs.changes.outputs[matrix.service.name] == 'true'
         name: Build Docker image
-        run: docker build -t ${{ matrix.service.name }}:ci ${{ matrix.service.dir }}
+        run: docker build -t ${{ matrix.service.name }}:ci -f ${{ matrix.service.dir }}/Dockerfile .
 
   ci-passed:
     if: always()
