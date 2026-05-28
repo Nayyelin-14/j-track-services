@@ -1,5 +1,5 @@
 import "dotenv/config";
-import app from "./app";
+import app from "./app.js";
 import { sql } from "@jtrack/shared/db";
 import { redisClient } from "./redis.js";
 import { kafka } from "./kafka.js";
@@ -22,28 +22,23 @@ async function connectRedis() {
 }
 
 async function initDB() {
-  await sql`BEGIN`;
-  try {
-    await sql`
-      DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'job_type') THEN
-          CREATE TYPE job_type AS ENUM ('Full-time', 'Part-time', 'Contract', 'Internship');
-        END IF;
+  await sql`
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'job_type') THEN
+        CREATE TYPE job_type AS ENUM ('Full-time', 'Part-time', 'Contract', 'Internship');
+      END IF;
 
-        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'work_location') THEN
-          CREATE TYPE work_location AS ENUM ('On-site', 'Remote', 'Hybrid');
-        END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'work_location') THEN
+        CREATE TYPE work_location AS ENUM ('On-site', 'Remote', 'Hybrid');
+      END IF;
 
-        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'application_status') THEN
-          CREATE TYPE application_status AS ENUM ('Submitted', 'Rejected', 'Hired');
-        END IF;
-      END $$;
-    `;
-    await sql`COMMIT`;
-  } catch (err) {
-    await sql`ROLLBACK`;
-    throw err;
-  }
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'application_status') THEN
+        CREATE TYPE application_status AS ENUM ('Applied', 'Submitted', 'Rejected', 'Hired');
+      END IF;
+    END $$;
+  `;
+
+  await sql`ALTER TYPE application_status ADD VALUE IF NOT EXISTS 'Applied'`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS companies (
@@ -123,7 +118,7 @@ process.on("SIGTERM", gracefulShutdown);
 process.on("SIGINT", gracefulShutdown);
 
 async function startServer() {
-  const PORT = process.env.PORT || 7001;
+  const PORT = process.env.PORT || 7002;
 
   try {
     await connectRedis();

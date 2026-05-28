@@ -2,9 +2,9 @@ import { Request, Response } from "express";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import { z } from "zod";
-import AIConfig from "../config/ai";
-import careerService from "../services/career";
-import { validateCareerGuidance } from "../validators/career";
+import AIConfig from "../config/ai.js";
+import careerService from "../services/career.js";
+import { validateCareerGuidance } from "../validators/career.js";
 
 const setSSEHeaders = (res: Response): void => {
   res.setHeader("Content-Type", "text/event-stream");

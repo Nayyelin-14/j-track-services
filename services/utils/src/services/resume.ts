@@ -1,8 +1,10 @@
 import { Response } from "express";
-import { fullResumePrompt, prepareResumeText } from "../config/prompts";
-import GroqConfig from "../config/groq";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
-
+import { fullResumePrompt, prepareResumeText } from "../config/prompts.js";
+import GroqConfig from "../config/groq.js";
+import * as pdfParseModule from "pdf-parse";
+const pdfParse = ((pdfParseModule as any).default ?? pdfParseModule) as (
+  buffer: Buffer,
+) => Promise<{ text: string }>;
 const writeSSE = (res: Response, data: object): void => {
   if (!res.writableEnded) {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -40,16 +42,8 @@ class ResumeService {
     console.log("PDF size:", buffer.length, "bytes");
     const start = Date.now();
 
-    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
-    const pdf = await loadingTask.promise;
-
-    let fullText = "";
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageText = content.items.map((item: any) => item.str).join(" ");
-      fullText += pageText + "\n";
-    }
+    const data = await pdfParse(buffer);
+    const fullText = data.text;
 
     console.log("PDF parsed in:", Date.now() - start, "ms");
     console.log("Resume text length:", fullText.length);

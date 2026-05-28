@@ -1,7 +1,7 @@
 import { Response } from "express";
-import { careerGuidancePrompt } from "../config/prompts";
-import { CareerGuidanceInput } from "../validators/career";
-import AIConfig from "../config/ai";
+import { careerGuidancePrompt } from "../config/prompts.js";
+import { CareerGuidanceInput } from "../validators/career.js";
+import AIConfig from "../config/ai.js";
 
 const writeSSE = (res: Response, data: object): void => {
   if (!res.writableEnded) {

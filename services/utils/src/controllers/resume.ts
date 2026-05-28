@@ -4,8 +4,8 @@ import { z } from "zod";
 import {
   validateResumeFile,
   MAX_PDF_SIZE_BYTES,
-} from "../validators/resume";
-import resumeService from "../services/resume";
+} from "../validators/resume.js";
+import resumeService from "../services/resume.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { careerGuidanceByAI, generateTest } from "../controllers/ai";
-import { analyzeMatch } from "../controllers/match";
+import { careerGuidanceByAI, generateTest } from "../controllers/ai.js";
+import { analyzeMatch } from "../controllers/match.js";
 
 const router = Router();
 

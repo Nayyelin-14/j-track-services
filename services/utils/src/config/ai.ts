@@ -9,7 +9,7 @@ class AIConfig {
       const apiKey = process.env.API_KEY_GEMINI;
       if (!apiKey) {
         throw new Error(
-          "GEMINI_API_KEY is not configured in environment variables",
+          "API_KEY_GEMINI is not configured in environment variables",
         );
       }
       this.instance = new GoogleGenAI({ apiKey });

@@ -1,10 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import matchService from "../match";
 import GroqConfig from "../../config/groq";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 
-vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
-  getDocument: vi.fn(),
+const { mockGetText, MockPDFParse } = vi.hoisted(() => {
+  const mockGetText = vi.fn().mockResolvedValue({ text: "" });
+  return {
+    mockGetText,
+    MockPDFParse: vi.fn(function () {
+      return { getText: mockGetText };
+    }),
+  };
+});
+
+vi.mock("pdf-parse", () => ({
+  PDFParse: MockPDFParse,
 }));
 
 vi.mock("../../config/groq", () => ({
@@ -60,16 +69,9 @@ const validJob = {
 };
 
 function mockPdfPage(textParts: string[]) {
-  vi.mocked(pdfjsLib.getDocument).mockReturnValue({
-    promise: Promise.resolve({
-      numPages: 1,
-      getPage: vi.fn().mockResolvedValue({
-        getTextContent: vi.fn().mockResolvedValue({
-          items: textParts.map((str) => ({ str })),
-        }),
-      }),
-    }),
-  } as never);
+  mockGetText.mockResolvedValue({
+    text: textParts.join(""),
+  });
 }
 
 function mockFetchResponse(overrides: Partial<{

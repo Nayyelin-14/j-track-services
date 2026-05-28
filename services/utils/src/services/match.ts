@@ -1,8 +1,7 @@
 import { Response } from "express";
-import GroqConfig from "../config/groq";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
-import { prepareResumeText } from "../config/prompts";
-
+import GroqConfig from "../config/groq.js";
+import { prepareResumeText } from "../config/prompts.js";
+import { PDFParse } from "pdf-parse";
 const writeSSE = (res: Response, data: object): void => {
   if (!res.writableEnded) {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -51,8 +50,8 @@ const matchPrompt = (resumeText: string, job: JobDetails): string => {
     "5. A brief summary of the analysis",
     "6. Full analysis in natural language",
     "",
-    'Respond in valid JSON format:',
-    '{',
+    "Respond in valid JSON format:",
+    "{",
     '  "matchScore": number,',
     '  "strengths": string[],',
     '  "gaps": string[],',
@@ -60,7 +59,7 @@ const matchPrompt = (resumeText: string, job: JobDetails): string => {
     '  "recommendationReason": string,',
     '  "summary": string,',
     '  "fullAnalysis": string',
-    '}',
+    "}",
     "",
     "Return ONLY the JSON. No markdown, no code blocks, no extra text.",
   );
@@ -69,30 +68,29 @@ const matchPrompt = (resumeText: string, job: JobDetails): string => {
 };
 
 class MatchService {
-  async downloadAndParseResume(url: string, signal: AbortSignal): Promise<string> {
+  async downloadAndParseResume(
+    url: string,
+    signal: AbortSignal,
+  ): Promise<string> {
     const response = await fetch(url, {
       signal,
-      headers: { "Accept": "application/pdf,application/octet-stream,*/*" },
+      headers: { Accept: "application/pdf,application/octet-stream,*/*" },
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to download resume: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Failed to download resume: ${response.status} ${response.statusText}`,
+      );
     }
 
     const contentType = response.headers.get("content-type") || "";
     const buffer = Buffer.from(await response.arrayBuffer());
 
-    if (contentType.includes("pdf") || buffer.toString("ascii", 0, 5).includes("%PDF")) {
-      const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
-      const pdf = await loadingTask.promise;
-
-      let fullText = "";
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        const pageText = content.items.map((item: any) => item.str).join(" ");
-        fullText += pageText + "\n";
-      }
+    if (
+      contentType.includes("pdf") ||
+      buffer.toString("ascii", 0, 5).includes("%PDF")
+    ) {
+      const { text: fullText } = await new PDFParse({ data: buffer }).getText();
 
       if (!fullText || fullText.length < 50) {
         throw new Error("Resume PDF is empty or unreadable");
@@ -150,10 +148,13 @@ class MatchService {
     writeSSE(res, {
       status: "complete",
       result: {
-        matchScore: typeof parsed.matchScore === "number" ? parsed.matchScore : 0,
+        matchScore:
+          typeof parsed.matchScore === "number" ? parsed.matchScore : 0,
         strengths: Array.isArray(parsed.strengths) ? parsed.strengths : [],
         gaps: Array.isArray(parsed.gaps) ? parsed.gaps : [],
-        recommendation: ["yes", "maybe", "no"].includes(parsed.recommendation as string)
+        recommendation: ["yes", "maybe", "no"].includes(
+          parsed.recommendation as string,
+        )
           ? (parsed.recommendation as string)
           : "maybe",
         recommendationReason: parsed.recommendationReason || "",

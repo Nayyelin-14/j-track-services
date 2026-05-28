@@ -1,0 +1,13 @@
+node_modules
+.git
+*.md
+.env
+.env.*
+*.log
+.gitignore
+Dockerfile
+docker-compose.yml
+.pnpm-store
+dist
+coverage
+.tsbuildinfo

@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
-import matchService from "../services/match";
-import { analyzeMatchSchema } from "../validators/match";
+import matchService from "../services/match.js";
+import { analyzeMatchSchema } from "../validators/match.js";
 
 const setSSEHeaders = (res: Response): void => {
   res.setHeader("Content-Type", "text/event-stream");

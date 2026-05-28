@@ -6,7 +6,7 @@ import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import { getBuffer } from "@jtrack/shared/buffer";
 import { redisClient } from "../index.js";
 
-const UTIL_SERVICE = process.env.UTILS_SERVICE_URL || "http://localhost:6001";
+const UTIL_SERVICE = process.env.UTILS_SERVICE_URL || "http://localhost:6001/api/utils";
 
 // ─── GET /me ────────────────────────────────────────────────────────────────
 // Returns full user profile including skills

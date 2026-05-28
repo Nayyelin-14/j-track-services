@@ -27,7 +27,7 @@ const {
   trackFailedResetAttempt,
 } = createRedisHelpers(redisClient);
 
-const UTIL_SERVICE = process.env.UTILS_SERVICE_URL;
+const UTIL_SERVICE = process.env.UTILS_SERVICE_URL || "http://localhost:6001/api/utils";
 
 export const register = TryCatch(async (req: Request, res: Response) => {
   const { name, email, password, phone_number, role, bio } = req.body;
