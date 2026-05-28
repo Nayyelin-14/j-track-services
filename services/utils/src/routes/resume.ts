@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { analyzeResume, uploadMiddleware } from "../controllers/resume";
+import { analyzeResume, uploadMiddleware } from "../controllers/resume.js";
 
 const router = Router();
 

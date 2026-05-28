@@ -10,7 +10,7 @@ import {
   addSkills,
   removeSkills,
   getAllSkills,
-} from "../controllers/user.controller";
+} from "../controllers/user.controller.js";
 import { isAuthenticated } from "@jtrack/shared/isauthenticated";
 const router = Router();
 

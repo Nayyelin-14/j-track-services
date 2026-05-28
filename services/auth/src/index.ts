@@ -25,14 +25,6 @@ async function connectRedis() {
 
 async function initDB() {
   await sql`
-    ALTER TABLE users
-    DROP COLUMN IF EXISTS reset_token,
-    DROP COLUMN IF EXISTS reset_token_expires,
-    DROP COLUMN IF EXISTS reset_token_attempts,
-    DROP COLUMN IF EXISTS reset_token_locked_until;
-  `;
-
-  await sql`
     DO $$
     BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
@@ -59,6 +51,14 @@ async function initDB() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       subscription TIMESTAMPTZ
     );
+  `;
+
+  await sql`
+    ALTER TABLE users
+    DROP COLUMN IF EXISTS reset_token,
+    DROP COLUMN IF EXISTS reset_token_expires,
+    DROP COLUMN IF EXISTS reset_token_attempts,
+    DROP COLUMN IF EXISTS reset_token_locked_until;
   `;
 
   await sql`

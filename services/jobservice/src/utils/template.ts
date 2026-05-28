@@ -83,7 +83,7 @@ export const applicationStatusTemplate = ({
                 text-align: center;
               ">
                 <p style="margin: 0; color: #64748b; font-size: 15px; line-height: 1.8;">
-                  Please log in to <strong style="color: #3b82f6;">HireHeaven</strong> to view your updated application status.
+                  Please log in to <strong style="color: #3b82f6;">j-track</strong> to view your updated application status.
                 </p>
               </div>
 

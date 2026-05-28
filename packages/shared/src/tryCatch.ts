@@ -7,9 +7,10 @@ type Handler = (
 ) => Promise<any>;
 
 export const TryCatch =
-  (fn: Handler) => async (req: Request, res: Response, next: NextFunction) => {
+  (fn: Handler) =>
+  async (req: Request, res: Response, next?: NextFunction) => {
     try {
-      await fn(req, res, next);
+      await fn(req, res, next!);
     } catch (error: any) {
       const status = error?.statusCode || 500;
       const message = error?.message || "Internal Server Error";

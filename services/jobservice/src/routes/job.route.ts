@@ -16,8 +16,8 @@ import {
   getApplications,
   getApplicationsByRecruiterJob,
   updateJobApplication,
-} from "../controller/job.con";
-import { analyzeJobMatch } from "../controllers/match";
+} from "../controllers/job.con.js";
+import { analyzeJobMatch } from "../controllers/match.con.js";
 
 const router = Router();
 const upload = multer({
@@ -35,6 +35,7 @@ router.post(
 router.get("/", getAllCompanies);
 router.get("/:company_id", getCompanyById);
 router.get("/detail/:company_id", isAuthenticated, getCompanyDetail);
+router.delete("/:id", isAuthenticated, deleteCompany);
 
 // ── Jobs ─────────────────────────────────────────────────────────────────
 router.post("/create-job", isAuthenticated, createJob);

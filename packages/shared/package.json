@@ -27,10 +27,11 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.1.0",
     "@types/node": "^25.6.0",
+    "@types/pg": "^8.11.0",
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.1.0",
+    "pg": "^8.13.0",
     "datauri": "^4.1.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
