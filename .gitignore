@@ -8,3 +8,7 @@ build/
 .pnpm-debug.log
 coverage/
 .DS_Store
+
+# Nginx
+nginx/ssl/*.pem
+nginx/ssl/*.key

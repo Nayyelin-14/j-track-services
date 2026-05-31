@@ -1,22 +1,4 @@
 services:
-  postgres:
-    image: postgres:15
-    container_name: jtrack-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: jtrack
-      POSTGRES_USER: jtrack
-      POSTGRES_PASSWORD: jtrack123
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jtrack"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   redis:
     image: redis:7-alpine
     container_name: jtrack-redis
@@ -59,8 +41,6 @@ services:
     container_name: jtrack-auth
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -70,7 +50,6 @@ services:
     env_file: .env
     environment:
       PORT: 7000
-      DB_URL: postgresql://jtrack:jtrack123@postgres:5432/jtrack
       REDIS_URL: redis://redis:6379
       KAFKA_BROKER: kafka:9092
       UTILS_SERVICE_URL: http://utils:6001/api/utils
@@ -82,8 +61,6 @@ services:
     container_name: jtrack-user
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     ports:
@@ -91,7 +68,6 @@ services:
     env_file: .env
     environment:
       PORT: 7001
-      DB_URL: postgresql://jtrack:jtrack123@postgres:5432/jtrack
       REDIS_URL: redis://redis:6379
       UTILS_SERVICE_URL: http://utils:6001/api/utils
 
@@ -102,8 +78,6 @@ services:
     container_name: jtrack-job
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -113,7 +87,6 @@ services:
     env_file: .env
     environment:
       PORT: 7002
-      DB_URL: postgresql://jtrack:jtrack123@postgres:5432/jtrack
       REDIS_URL: redis://redis:6379
       KAFKA_BROKER: kafka:9092
       UTILS_SERVICE_URL: http://utils:6001/api/utils
@@ -226,7 +199,6 @@ services:
     env_file: .env
     environment:
       PORT: 7000
-      DB_URL: postgresql://jtrack:jtrack123@postgres:5432/jtrack
       REDIS_URL: redis://redis:6379
       KAFKA_BROKER: kafka:9092
       UTILS_SERVICE_URL: http://utils:6001/api/utils
@@ -234,8 +206,6 @@ services:
     ports:
       - "7000:7000"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -253,15 +223,12 @@ services:
     env_file: .env
     environment:
       PORT: 7001
-      DB_URL: postgresql://jtrack:jtrack123@postgres:5432/jtrack
       REDIS_URL: redis://redis:6379
       UTILS_SERVICE_URL: http://utils:6001/api/utils
     command: sh -c "pnpm build:shared && pnpm --filter user dev"
     ports:
       - "7001:7001"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -277,7 +244,6 @@ services:
     env_file: .env
     environment:
       PORT: 7002
-      DB_URL: postgresql://jtrack:jtrack123@postgres:5432/jtrack
       REDIS_URL: redis://redis:6379
       KAFKA_BROKER: kafka:9092
       UTILS_SERVICE_URL: http://utils:6001/api/utils
@@ -285,12 +251,23 @@ services:
     ports:
       - "7002:7002"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
         condition: service_healthy
 
-volumes:
-  pgdata:
+  nginx-dev:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: jtrack-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/dev/conf.d/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - auth-dev
+      - user-dev
+      - jobservice-dev
+      - utils-dev
