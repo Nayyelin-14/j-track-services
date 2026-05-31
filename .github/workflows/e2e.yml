@@ -6,11 +6,15 @@ on:
     paths:
       - 'packages/shared/**'
       - 'services/**'
+      - 'e2e/**'
+      - '.github/workflows/e2e.yml'
   pull_request:
     branches: [main]
     paths:
       - 'packages/shared/**'
       - 'services/**'
+      - 'e2e/**'
+      - '.github/workflows/e2e.yml'
   workflow_dispatch:
 
 concurrency:
