@@ -22,9 +22,15 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  DB_URL: postgresql://jtrack:jtrack123@localhost:5432/jtrack
+  REDIS_URL: redis://localhost:6379
+  KAFKA_BROKER: localhost:9092
+  UTILS_SERVICE_URL: http://localhost:6001/api/utils
+  FRONTEND_URL: http://localhost:3000
   JWT_ACCESS_SECRET: e2e-access-secret-not-for-production
   JWT_REFRESH_SECRET: e2e-refresh-secret-not-for-production
   JWT_RESET_SECRET: e2e-reset-secret-not-for-production
+  NODE_ENV: ci
 
 jobs:
   e2e:
@@ -100,25 +106,26 @@ jobs:
 
       - name: Wait for services to be ready
         run: |
+          set +e
           for port in 7000 7001 7002 6001; do
-            for i in $(seq 1 20); do
-              if curl -sf "http://localhost:$port/health" > /dev/null 2>&1; then
+            for i in $(seq 1 30); do
+              resp=$(curl -sf "http://localhost:$port/health" 2>&1)
+              if [ $? -eq 0 ]; then
                 echo "✓ Service on port $port ready"
                 break
               fi
-              if [ "$i" -eq 20 ]; then
+              if [ "$i" -eq 30 ]; then
                 echo "✗ Service on port $port failed to start"
-                curl -s "http://localhost:$port/health" || true
+                echo "--- Last health check response ---"
+                curl -sv "http://localhost:$port/health" 2>&1
                 exit 1
               fi
-              sleep 1
+              sleep 2
             done
           done
 
       - name: Run E2E tests
         run: pnpm --filter e2e test
-        env:
-          E2E_BASE_URL: http://localhost:7000
 
       - name: Upload coverage
         if: always()
