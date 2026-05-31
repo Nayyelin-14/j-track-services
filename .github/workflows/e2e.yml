@@ -30,6 +30,11 @@ env:
   JWT_ACCESS_SECRET: e2e-access-secret-not-for-production
   JWT_REFRESH_SECRET: e2e-refresh-secret-not-for-production
   JWT_RESET_SECRET: e2e-reset-secret-not-for-production
+  CLOUD_NAME: dummy
+  CLOUD_API_KEY: dummy
+  CLOUD_API_SECRET: dummy
+  API_KEY_GROQ: dummy
+  API_KEY_GEMINI: dummy
   NODE_ENV: ci
 
 jobs:
