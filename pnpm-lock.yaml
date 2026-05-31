@@ -96,9 +96,6 @@ importers:
       multer:
         specifier: ^2.1.1
         version: 2.1.1
-      postgres:
-        specifier: ^3.4.9
-        version: 3.4.9
       redis:
         specifier: ^5.12.1
         version: 5.12.1
