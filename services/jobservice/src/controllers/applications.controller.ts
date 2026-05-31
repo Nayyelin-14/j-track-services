@@ -28,14 +28,18 @@ export const applyJob = TryCatch(
     const applicant_id = user.user_id;
     const resume = user?.resume;
 
-    if (!resume) {
-      return next(new ErrorHandler(403, "Add at least one resume"));
-    }
-
     const { jobId } = req.body;
     if (!jobId) {
       return next(new ErrorHandler(403, "Not Found!!!"));
     }
+
+    const [applicant] = await sql`
+      SELECT email FROM users WHERE user_id = ${applicant_id}
+    `;
+    if (!applicant) {
+      return next(new ErrorHandler(404, "Applicant not found"));
+    }
+    const applicant_email = applicant.email;
 
     const [job] = await sql`
   SELECT is_active FROM jobs WHERE job_id=${jobId}`;
@@ -63,7 +67,7 @@ export const applyJob = TryCatch(
   VALUES (
     ${jobId},
     ${applicant_id},
-    ${user.email},
+    ${applicant_email},
     ${resume},
     ${isSubscribed}
   )
@@ -83,6 +87,7 @@ export const applyJob = TryCatch(
     }
 
     return res.status(200).json({
+      success: true,
       message: "Application submitted successfully",
       application: newApplication,
     });

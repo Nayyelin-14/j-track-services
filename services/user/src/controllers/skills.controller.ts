@@ -85,7 +85,7 @@ export const removeSkills = TryCatch(async (req: AuthRequest, res: Response) => 
     throw new ErrorHandler(401, "Unauthorized");
   }
 
-  const { skill_ids } = req.body;
+  const { skill_ids } = req.body || {};
 
   if (!Array.isArray(skill_ids) || skill_ids.length === 0) {
     throw new ErrorHandler(400, "skill_ids array is required");

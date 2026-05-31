@@ -36,6 +36,8 @@ router.post(
   upload.single("logo"),
   createCompany,
 );
+router.get("/active-jobs", getAllActiveJobs);
+router.get("/my-applications", isAuthenticated, getApplications);
 router.get("/", getAllCompanies);
 router.get("/:company_id", getCompanyById);
 router.get("/detail/:company_id", isAuthenticated, getCompanyDetail);
@@ -45,11 +47,9 @@ router.delete("/:id", isAuthenticated, deleteCompany);
 router.post("/create-job", isAuthenticated, createJob);
 router.delete("/jobs/:job_id", isAuthenticated, deleteJob);
 router.patch("/jobs/:job_id", isAuthenticated, updateJob);
-router.get("/active-jobs", getAllActiveJobs);
 router.get("/jobs/:job_id", getJobById);
 
 router.post("/apply", isAuthenticated, applyJob);
-router.get("/my-applications", isAuthenticated, getApplications);
 router.get(
   "/applications-by-job/:job_id",
   isAuthenticated,

@@ -180,6 +180,10 @@ export const updateBio = TryCatch(async (req: AuthRequest, res: Response) => {
     throw new ErrorHandler(400, "Bio must be a string");
   }
 
+  if (bio.trim().length === 0) {
+    throw new ErrorHandler(400, "Bio cannot be empty");
+  }
+
   if (bio.length > 2000) {
     throw new ErrorHandler(400, "Bio must be under 2000 characters");
   }
