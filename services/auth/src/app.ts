@@ -3,6 +3,7 @@ import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import cors from "cors";
 import authRoutes from "./routes/auth.js";
+import { errorMiddleware } from "@jtrack/shared/errorHandler";
 
 const app = express();
 
@@ -17,5 +18,7 @@ app.use(
 );
 
 app.use("/api/auth", authRoutes);
+
+app.use(errorMiddleware);
 
 export default app;

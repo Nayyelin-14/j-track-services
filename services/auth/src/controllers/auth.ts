@@ -12,6 +12,7 @@ import {
 import { accessCookieOptions, refreshCookieOptions } from "@jtrack/shared/cookies";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import { getBuffer } from "@jtrack/shared/buffer";
+import type { AuthRequest } from "@jtrack/shared/types";
 import { kafka } from "../kafka.js";
 import { createRedisHelpers, withCache } from "@jtrack/shared/redis/helpers";
 import { redisClient } from "../redis.js";
@@ -145,8 +146,8 @@ export const login = TryCatch(async (req: Request, res: Response) => {
   });
 });
 
-export const logout = TryCatch(async (req: Request, res: Response) => {
-  const userData = (req as any).user;
+export const logout = TryCatch(async (req: AuthRequest, res: Response) => {
+  const userData = req.user;
   const refreshToken = req.cookies?.refreshToken;
 
   if (!userData?.user_id) {
@@ -183,8 +184,8 @@ export const logout = TryCatch(async (req: Request, res: Response) => {
   });
 });
 
-export const getMe = TryCatch(async (req: Request, res: Response) => {
-  const userData = (req as any).user;
+export const getMe = TryCatch(async (req: AuthRequest, res: Response) => {
+  const userData = req.user;
 
   if (!userData?.user_id) {
     throw new ErrorHandler(401, "Unauthorized");
@@ -303,7 +304,7 @@ export const resetPassword = TryCatch(async (req: Request, res: Response) => {
   }
 
   if (payload.type !== "reset-password") {
-    throw new ErrorHandler(400, "Something went wrong");
+    throw new ErrorHandler(400, "Invalid token type");
   }
 
   await trackFailedResetAttempt(payload.user_id, payload.email, RESET_TOKEN_PREFIX);
@@ -344,8 +345,8 @@ export const resetPassword = TryCatch(async (req: Request, res: Response) => {
   });
 });
 
-export const changePassword = TryCatch(async (req: Request, res: Response) => {
-  const user_id = (req as any).user?.user_id;
+export const changePassword = TryCatch(async (req: AuthRequest, res: Response) => {
+  const user_id = req.user?.user_id;
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword || !newPassword) {

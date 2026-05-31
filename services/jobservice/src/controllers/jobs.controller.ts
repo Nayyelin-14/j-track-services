@@ -2,13 +2,13 @@ import { Request, Response, NextFunction } from "express";
 import { sql } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
+import type { AuthRequest } from "@jtrack/shared/types";
 import { redisClient } from "../redis.js";
 import {
-  AuthRequest,
   CACHE_KEYS,
   invalidateJobsCache,
   invalidateCompaniesCache,
-  sanitizeString,
+  sanitize,
   sanitizePositiveInt,
   JOB_TYPES,
   WORK_LOCATIONS,
@@ -26,14 +26,14 @@ export const createJob = TryCatch(
       return next(new ErrorHandler(403, "Only recruiters can create a job"));
     }
 
-    const title = sanitizeString(req.body.title, "Title", 255);
-    const description = sanitizeString(
+    const title = sanitize(req.body.title, "Title", 255);
+    const description = sanitize(
       req.body.description,
       "Description",
       5000,
     );
-    const role = sanitizeString(req.body.role, "Role", 255);
-    const location = sanitizeString(req.body.location, "Location", 255);
+    const role = sanitize(req.body.role, "Role", 255);
+    const location = sanitize(req.body.location, "Location", 255);
 
     const job_type = req.body.job_type as JobType;
     if (!JOB_TYPES.includes(job_type)) {
@@ -165,7 +165,7 @@ export const deleteJob = TryCatch(
     }
 
     if (job.recruiter_id !== req.user.user_id) {
-      return next(new ErrorHandler(403, "Something went wrong"));
+      return next(new ErrorHandler(403, "You are not authorized to delete this job"));
     }
 
     await sql`
@@ -225,19 +225,19 @@ export const updateJob = TryCatch(
     let is_active = existingJob.is_active;
 
     if (req.body.title !== undefined) {
-      title = sanitizeString(req.body.title, "Title", 255);
+      title = sanitize(req.body.title, "Title", 255);
     }
 
     if (req.body.description !== undefined) {
-      description = sanitizeString(req.body.description, "Description", 5000);
+      description = sanitize(req.body.description, "Description", 5000);
     }
 
     if (req.body.location !== undefined) {
-      location = sanitizeString(req.body.location, "Location", 255);
+      location = sanitize(req.body.location, "Location", 255);
     }
 
     if (req.body.role !== undefined) {
-      role = sanitizeString(req.body.role, "Role", 255);
+      role = sanitize(req.body.role, "Role", 255);
     }
 
     if (req.body.job_type !== undefined) {

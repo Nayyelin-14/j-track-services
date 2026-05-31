@@ -72,17 +72,6 @@ export const sanitize = (val: unknown, field: string, max: number): string => {
   return trimmed;
 };
 
-export const sanitizeString = (val: unknown, field: string, max: number): string => {
-  if (typeof val !== "string" || !val.trim()) {
-    throw new ErrorHandler(400, `${field} is required`);
-  }
-  const trimmed = val.trim();
-  if (trimmed.length > max) {
-    throw new ErrorHandler(400, `${field} must be at most ${max} characters`);
-  }
-  return trimmed;
-};
-
 export const sanitizePositiveInt = (val: unknown, field: string): number => {
   const num = parseInt(val as string);
   if (isNaN(num) || num <= 0) {

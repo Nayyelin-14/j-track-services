@@ -3,11 +3,11 @@ import axios from "axios";
 import { sql } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
+import type { AuthRequest } from "@jtrack/shared/types";
 import { withCache } from "@jtrack/shared/redis/helpers";
 import { getBuffer } from "@jtrack/shared/buffer";
 import { redisClient } from "../redis.js";
 import {
-  AuthRequest,
   CACHE_KEYS,
   invalidateCompaniesCache,
   sanitize,
