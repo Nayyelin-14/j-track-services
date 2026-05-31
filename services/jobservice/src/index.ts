@@ -46,8 +46,9 @@ async function initDB() {
       name           VARCHAR(255) NOT NULL UNIQUE,
       description    TEXT NOT NULL,
       website        VARCHAR(255) NOT NULL,
-      logo           VARCHAR(255) NOT NULL,
-      logo_public_id VARCHAR(255) NOT NULL,
+      location       VARCHAR(255),
+      logo           VARCHAR(255),
+      logo_public_id VARCHAR(255),
       recruiter_id   INTEGER NOT NULL,
       created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
@@ -78,7 +79,7 @@ async function initDB() {
       applicant_id    INTEGER NOT NULL,
       applicant_email VARCHAR(255) NOT NULL,
       status          application_status NOT NULL DEFAULT 'Applied',
-      resume          VARCHAR(255) NOT NULL,
+      resume          VARCHAR(255),
       applied_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       subscribed      BOOLEAN,
       UNIQUE (job_id, applicant_id)

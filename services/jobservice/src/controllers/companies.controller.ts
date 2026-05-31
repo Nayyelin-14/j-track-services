@@ -26,10 +26,6 @@ export const createCompany = TryCatch(
       );
     }
 
-    if (!req.file) {
-      return next(new ErrorHandler(400, "Company logo is required"));
-    }
-
     const name = sanitize(req.body.name, "Name", 255);
     const description = sanitize(req.body.description, "Description", 5000);
     const website = sanitize(req.body.website, "Website", 255);
@@ -52,29 +48,35 @@ export const createCompany = TryCatch(
       return next(new ErrorHandler(409, "Company name already taken"));
     }
 
-    const allowed = ["image/jpeg", "image/png", "image/webp"];
-    if (!allowed.includes(req.file.mimetype)) {
-      return next(new ErrorHandler(400, "Logo must be JPEG, PNG, or WebP"));
-    }
-    if (req.file.size > 5 * 1024 * 1024) {
-      return next(new ErrorHandler(400, "Logo must be smaller than 5 MB"));
-    }
+    let logo = null;
+    let logo_public_id = null;
 
-    const dataUri = getBuffer(req.file);
-    if (!dataUri?.content) {
-      return next(new ErrorHandler(500, "Failed to process logo"));
+    if (req.file) {
+      const allowed = ["image/jpeg", "image/png", "image/webp"];
+      if (!allowed.includes(req.file.mimetype)) {
+        return next(new ErrorHandler(400, "Logo must be JPEG, PNG, or WebP"));
+      }
+      if (req.file.size > 5 * 1024 * 1024) {
+        return next(new ErrorHandler(400, "Logo must be smaller than 5 MB"));
+      }
+
+      const dataUri = getBuffer(req.file);
+      if (!dataUri?.content) {
+        return next(new ErrorHandler(500, "Failed to process logo"));
+      }
+
+      const uploadRes = await axios.post(
+        `${process.env.UTILS_SERVICE_URL}/upload`,
+        { buffer: dataUri.content },
+      );
+
+      if (!uploadRes.data.success) {
+        return next(new ErrorHandler(500, "Logo upload failed"));
+      }
+
+      logo = uploadRes.data.url;
+      logo_public_id = uploadRes.data.public_id;
     }
-
-    const uploadRes = await axios.post(
-      `${process.env.UTILS_SERVICE_URL}/upload`,
-      { buffer: dataUri.content },
-    );
-
-    if (!uploadRes.data.success) {
-      return next(new ErrorHandler(500, "Logo upload failed"));
-    }
-
-    const { url: logo, public_id: logo_public_id } = uploadRes.data;
 
     const [company] = await sql`
       INSERT INTO companies

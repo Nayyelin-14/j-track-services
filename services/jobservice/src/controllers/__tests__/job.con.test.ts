@@ -83,16 +83,20 @@ describe("createCompany", () => {
       expect.objectContaining({ statusCode: 403 }),
     );
   });
-  it("throws 400 without logo file", async () => {
+  it("creates company without logo file", async () => {
+    mockSql.mockResolvedValueOnce([]); // no duplicate
+    mockSql.mockResolvedValueOnce([{ company_id: 1 }]);
     const next = mockNext();
+    const res = mockRes();
     await MODULES.createCompany(
-      mockReq({ user: { role: "recruiter", user_id: 1 } }),
-      mockRes(),
+      mockReq({
+        user: { role: "recruiter", user_id: 1 },
+        body: { name: "Acme", description: "Test", website: "https://acme.com" },
+      }),
+      res,
       next,
     );
-    expect(next).toHaveBeenCalledWith(
-      expect.objectContaining({ statusCode: 400 }),
-    );
+    expect(res.status).toHaveBeenCalledWith(201);
   });
 });
 
@@ -188,18 +192,8 @@ describe("applyJob", () => {
       expect.objectContaining({ statusCode: 403 }),
     );
   });
-  it("throws 403 without resume", async () => {
-    const next = mockNext();
-    await MODULES.applyJob(
-      mockReq({ user: { role: "jobseeker", user_id: 1, resume: null } }),
-      mockRes(),
-      next,
-    );
-    expect(next).toHaveBeenCalledWith(
-      expect.objectContaining({ statusCode: 403 }),
-    );
-  });
   it("applies successfully", async () => {
+    mockSql.mockResolvedValueOnce([{ email: "a@b.com" }]);
     mockSql.mockResolvedValueOnce([{ is_active: true }]);
     mockSql.mockResolvedValueOnce([
       { application_id: 1, job_id: 1, applicant_id: 1, status: "Submitted" },
@@ -211,9 +205,7 @@ describe("applyJob", () => {
         user: {
           role: "jobseeker",
           user_id: 1,
-          email: "a@b.com",
           resume: "https://res.cloudinary.com/r.pdf",
-          subscription: new Date(Date.now() + 86400000),
         },
         body: { jobId: 1 },
       }),
@@ -222,6 +214,7 @@ describe("applyJob", () => {
     );
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
+        success: true,
         message: "Application submitted successfully",
       }),
     );

@@ -71,7 +71,7 @@ describe("User Module", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.message).toContain("bio");
+      expect(res.body.message).toContain("Bio");
     });
 
     it("rejects empty bio", async () => {
@@ -115,7 +115,7 @@ describe("User Module", () => {
 
       const addRes = await api.post<{ success: boolean; message: string }>(
         ENDPOINTS.USER.ADD_SKILL,
-        { skill_ids: [1, 2, 3] },
+        { skills: ["TypeScript", "Node.js", "PostgreSQL"] },
         session.cookies,
         user,
       );
@@ -127,15 +127,22 @@ describe("User Module", () => {
     it("removes a skill from user", async () => {
       const session = await registerAndLogin(generateJobseeker());
 
-      await api.post(
+      const addRes = await api.post<{
+        success: boolean;
+        skills: Array<{ skill_id: number; name: string }>;
+      }>(
         ENDPOINTS.USER.ADD_SKILL,
-        { skill_ids: [1] },
+        { skills: ["TypeScript"] },
         session.cookies,
         user,
       );
 
+      expect(addRes.body.skills.length).toBeGreaterThan(0);
+      const skillId = addRes.body.skills[0].skill_id;
+
       const removeRes = await api.delete<{ success: boolean; message: string }>(
         ENDPOINTS.USER.REMOVE_SKILL,
+        { skill_ids: [skillId] },
         session.cookies,
         user,
       );

@@ -92,8 +92,8 @@ export const api = {
   put: <T>(path: string, body?: unknown, cookies?: Map<string, string>, service?: ServiceName) =>
     request<T>("PUT", path, { body, cookies, service }),
 
-  delete: <T>(path: string, cookies?: Map<string, string>, service?: ServiceName) =>
-    request<T>("DELETE", path, { cookies, service }),
+  delete: <T>(path: string, body?: unknown, cookies?: Map<string, string>, service?: ServiceName) =>
+    request<T>("DELETE", path, { body, cookies, service }),
 };
 
 export async function healthCheck(service?: ServiceName): Promise<boolean> {

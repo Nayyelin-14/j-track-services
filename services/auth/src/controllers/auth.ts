@@ -63,32 +63,26 @@ export const register = TryCatch(async (req: Request, res: Response) => {
   } else if (role === "jobseeker") {
     const file = req?.file;
 
-    if (!file) {
-      throw new ErrorHandler(500, "Failed to generate buffer");
+    let url = null;
+    let public_id = null;
+
+    if (file) {
+      const fileBuffer = getBuffer(file);
+      if (fileBuffer && fileBuffer.content) {
+        const response = await axios.post(`${UTIL_SERVICE}/upload`, {
+          buffer: fileBuffer.content,
+        });
+        if (response.data?.success) {
+          url = response.data.url;
+          public_id = response.data.public_id;
+        }
+      }
     }
 
-    const fileBuffer = getBuffer(file);
-
-    if (!fileBuffer || !fileBuffer.content) {
-      throw new ErrorHandler(400, "Resume file is required for job seekers");
-    }
-
-    const response = await axios.post(`${UTIL_SERVICE}/upload`, {
-      buffer: fileBuffer.content,
-    });
-    if (!response.data?.success) {
-      throw new ErrorHandler(500, "Upload failed");
-    }
-
-    const { url, public_id } = response.data;
-
-    if (!url || !public_id) {
-      throw new ErrorHandler(500, "Invalid upload response");
-    }
     const [user] = await sql`
     INSERT INTO users (name, email, password, phone_number, role , bio , resume ,resume_public_id  )
     VALUES (${name}, ${email}, ${hashedPassword}, ${phone_number}, ${role} ,${bio} , ${url} ,${public_id} )
-    RETURNING user_id , name , email , phone_number , role ,bio ,resume , resume_public_id created_at
+    RETURNING user_id , name , email , phone_number , role ,bio ,resume , resume_public_id, created_at
   `;
     registerUser = user;
   }
@@ -136,6 +130,7 @@ export const login = TryCatch(async (req: Request, res: Response) => {
   res.cookie("refreshToken", refreshToken, refreshCookieOptions);
 
   return res.json({
+    success: true,
     message: "Login success",
     user: {
       user_id: user.user_id,
@@ -376,7 +371,7 @@ export const changePassword = TryCatch(async (req: AuthRequest, res: Response) =
   if (!user) throw new ErrorHandler(404, "User not found");
 
   const isMatch = await bcrypt.compare(currentPassword, user.password);
-  if (!isMatch) throw new ErrorHandler(401, "Current password is incorrect");
+  if (!isMatch) throw new ErrorHandler(400, "Current password is incorrect");
 
   const hashedPassword = await bcrypt.hash(newPassword, 12);
 

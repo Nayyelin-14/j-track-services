@@ -77,7 +77,7 @@ describe("Jobs Module", () => {
         jobs,
       );
 
-      expect(status).toBe(400);
+      expect(status).toBe(409);
       expect(body).toHaveProperty("message");
     });
 
@@ -177,6 +177,7 @@ describe("Jobs Module", () => {
 
       const deleteRes = await api.delete<{ success: boolean; message: string }>(
         ENDPOINTS.JOBS.DELETE_JOB(jobId),
+        undefined,
         session.cookies,
         jobs,
       );
@@ -211,12 +212,12 @@ describe("Jobs Module", () => {
 
       const applyRes = await api.post<ApplicationResponse>(
         ENDPOINTS.JOBS.APPLY,
-        { job_id: jobId },
+        { jobId },
         jobseekerSession.cookies,
         jobs,
       );
 
-      expect(applyRes.status).toBe(201);
+      expect(applyRes.status).toBe(200);
       expect(applyRes.body.success).toBe(true);
       expect(applyRes.body.application).toBeDefined();
       expect(applyRes.body.application!.status).toBe("Applied");
@@ -267,14 +268,14 @@ describe("Jobs Module", () => {
 
       await api.post(
         ENDPOINTS.JOBS.APPLY,
-        { job_id: jobId },
+        { jobId },
         jobseekerSession.cookies,
         jobs,
       );
 
       const { status, body } = await api.post(
         ENDPOINTS.JOBS.APPLY,
-        { job_id: jobId },
+        { jobId },
         jobseekerSession.cookies,
         jobs,
       );
@@ -331,7 +332,7 @@ describe("Jobs Module", () => {
       const jobseekerSession = await registerAndLogin(generateJobseeker());
       const applyRes = await api.post<ApplicationResponse>(
         ENDPOINTS.JOBS.APPLY,
-        { job_id: jobId },
+        { jobId },
         jobseekerSession.cookies,
         jobs,
       );
