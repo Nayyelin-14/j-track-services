@@ -1,0 +1,61 @@
+# ── Production override ─────────────────────────────
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Differences from dev:
+#   - Adds nginx with TLS (port 443 + HTTP redirect on 80)
+#   - Does NOT start dev services (auth-dev, user-dev, etc.)
+#   - No Kafka UI, no dev exporters
+#
+# Prerequisites:
+#   1. Place SSL certs at ./nginx/ssl/fullchain.pem and ./nginx/ssl/privkey.pem
+#   2. Update server_name in nginx/prod/conf.d/default.conf to your domain
+#   3. Build production images: docker compose build
+
+services:
+  # ── Nginx (production with TLS) ─────────────────
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile.prod
+    container_name: jtrack-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/ssl/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+      - ./nginx/ssl/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
+    depends_on:
+      auth:
+        condition: service_started
+      user:
+        condition: service_started
+      jobservice:
+        condition: service_started
+      utils:
+        condition: service_started
+
+  # ── Override: don't start dev services in prod ──
+  auth-dev:
+    profiles:
+      - never
+
+  user-dev:
+    profiles:
+      - never
+
+  jobservice-dev:
+    profiles:
+      - never
+
+  utils-dev:
+    profiles:
+      - never
+
+  nginx-dev:
+    profiles:
+      - never
+
+  kafka-ui:
+    profiles:
+      - never
