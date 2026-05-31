@@ -2,12 +2,13 @@ import { Request, Response } from "express";
 import { sql } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
+import type { AuthRequest } from "@jtrack/shared/types";
 import { withCache } from "@jtrack/shared/redis/helpers";
 import { redisClient } from "../redis.js";
 import { CACHE_KEYS, invalidateUserCache } from "./utils.js";
 
-export const addSkills = TryCatch(async (req: Request, res: Response) => {
-  const userData = (req as any).user;
+export const addSkills = TryCatch(async (req: AuthRequest, res: Response) => {
+  const userData = req.user;
 
   if (!userData?.user_id) {
     throw new ErrorHandler(401, "Unauthorized");
@@ -77,8 +78,8 @@ export const addSkills = TryCatch(async (req: Request, res: Response) => {
   });
 });
 
-export const removeSkills = TryCatch(async (req: Request, res: Response) => {
-  const userData = (req as any).user;
+export const removeSkills = TryCatch(async (req: AuthRequest, res: Response) => {
+  const userData = req.user;
 
   if (!userData?.user_id) {
     throw new ErrorHandler(401, "Unauthorized");

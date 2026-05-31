@@ -1,6 +1,7 @@
 import express from "express";
 import helmet from "helmet";
 import cors from "cors";
+import { errorMiddleware } from "@jtrack/shared/errorHandler";
 
 const app = express();
 
@@ -13,5 +14,7 @@ app.use(
     credentials: true,
   }),
 );
+
+export { errorMiddleware };
 
 export default app;

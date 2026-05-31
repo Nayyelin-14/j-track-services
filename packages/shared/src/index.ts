@@ -10,3 +10,4 @@ export { ensureTopic, listTopics } from "./kafka/topic";
 export type { MailMessage, KafkaHealth, ProducerInstance } from "./kafka/types";
 export { createRedisHelpers, withCache } from "./redis/helpers";
 export type { RedisClient } from "./redis/helpers";
+export type { AuthRequest, UserPayload } from "./types";

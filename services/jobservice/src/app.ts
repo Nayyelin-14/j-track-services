@@ -4,6 +4,7 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import helmet from "helmet";
 import jobRoutes from "./routes/job.route.js";
+import { errorMiddleware } from "@jtrack/shared/errorHandler";
 
 const app = express();
 
@@ -19,5 +20,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
 
 app.use("/api/jobs", jobRoutes);
+
+app.use(errorMiddleware);
 
 export default app;

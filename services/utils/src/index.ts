@@ -1,5 +1,5 @@
 import "dotenv/config";
-import app from "./app.js";
+import app, { errorMiddleware } from "./app.js";
 import routes from "./routes/upload.js";
 import aiRoutes from "./routes/ai.js";
 import analyzeRoute from "./routes/resume.js";
@@ -31,6 +31,8 @@ export { mailConsumer };
 app.use("/api/utils", routes);
 app.use("/api/utils/ai/", aiRoutes);
 app.use("/api/utils/ai", analyzeRoute);
+
+app.use(errorMiddleware);
 
 app.get("/health", async (_req, res) => {
   const kafkaHealth = await mailConsumer.healthCheck();

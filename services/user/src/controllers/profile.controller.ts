@@ -2,12 +2,13 @@ import { Request, Response } from "express";
 import { sql } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
+import type { AuthRequest } from "@jtrack/shared/types";
 import { withCache } from "@jtrack/shared/redis/helpers";
 import { redisClient } from "../redis.js";
 import { CACHE_KEYS, invalidateUserCache } from "./utils.js";
 
-export const getMe = TryCatch(async (req: Request, res: Response) => {
-  const userData = (req as any).user;
+export const getMe = TryCatch(async (req: AuthRequest, res: Response) => {
+  const userData = req.user;
 
   if (!userData?.user_id) {
     throw new ErrorHandler(401, "Unauthorized");
@@ -113,8 +114,8 @@ export const getUserById = TryCatch(async (req: Request, res: Response) => {
   return res.json({ success: true, user });
 });
 
-export const updateUser = TryCatch(async (req: Request, res: Response) => {
-  const userData = (req as any).user;
+export const updateUser = TryCatch(async (req: AuthRequest, res: Response) => {
+  const userData = req.user;
 
   if (!userData?.user_id) {
     throw new ErrorHandler(401, "Unauthorized");
@@ -162,8 +163,8 @@ export const updateUser = TryCatch(async (req: Request, res: Response) => {
   return res.json({ success: true, message: "Profile updated", user: updated });
 });
 
-export const updateBio = TryCatch(async (req: Request, res: Response) => {
-  const userData = (req as any).user;
+export const updateBio = TryCatch(async (req: AuthRequest, res: Response) => {
+  const userData = req.user;
 
   if (!userData?.user_id) {
     throw new ErrorHandler(401, "Unauthorized");

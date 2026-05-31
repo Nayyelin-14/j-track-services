@@ -2,12 +2,12 @@ import { Response, NextFunction } from "express";
 import { sql } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
+import type { AuthRequest } from "@jtrack/shared/types";
 import { withCache } from "@jtrack/shared/redis/helpers";
 import { kafka } from "../kafka.js";
 import { redisClient } from "../redis.js";
 import { applicationStatusTemplate } from "../utils/template.js";
 import {
-  AuthRequest,
   CACHE_KEYS,
   sanitizePositiveInt,
 } from "./utils.js";
@@ -22,7 +22,7 @@ export const applyJob = TryCatch(
       return next(new ErrorHandler(403, "Unauthorized"));
     }
     if (user.role !== "jobseeker") {
-      return next(new ErrorHandler(403, "Something went wrong"));
+      return next(new ErrorHandler(403, "Only jobseekers can apply for jobs"));
     }
 
     const applicant_id = user.user_id;
@@ -71,7 +71,7 @@ export const applyJob = TryCatch(
 `;
     } catch (error: any) {
       if (error.code === "23505") {
-        throw new ErrorHandler(403, "Something went wrong!!!");
+        throw new ErrorHandler(409, "You have already applied for this job");
       }
       throw error;
     }

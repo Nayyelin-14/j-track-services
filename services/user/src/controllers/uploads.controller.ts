@@ -4,11 +4,12 @@ import { sql } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import { getBuffer } from "@jtrack/shared/buffer";
+import type { AuthRequest } from "@jtrack/shared/types";
 import { UTIL_SERVICE, invalidateUserCache } from "./utils.js";
 
 export const uploadProfilePic = TryCatch(
-  async (req: Request, res: Response) => {
-    const userData = (req as any).user;
+  async (req: AuthRequest, res: Response) => {
+    const userData = req.user;
 
     if (!userData?.user_id) {
       throw new ErrorHandler(401, "Unauthorized");
@@ -75,8 +76,8 @@ export const uploadProfilePic = TryCatch(
   },
 );
 
-export const uploadResume = TryCatch(async (req: Request, res: Response) => {
-  const userData = (req as any).user;
+export const uploadResume = TryCatch(async (req: AuthRequest, res: Response) => {
+  const userData = req.user;
 
   if (!userData?.user_id) {
     throw new ErrorHandler(401, "Unauthorized");

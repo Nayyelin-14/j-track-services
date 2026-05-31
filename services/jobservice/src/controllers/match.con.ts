@@ -1,7 +1,8 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 import { sql } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
+import type { AuthRequest } from "@jtrack/shared/types";
 
 const UTILS_SERVICE_URL = process.env.UTILS_SERVICE_URL;
 
@@ -37,8 +38,8 @@ const setSSEHeaders = (res: Response): void => {
   res.flushHeaders();
 };
 
-export const analyzeJobMatch = TryCatch(async (req: Request, res: Response) => {
-  const user = (req as any).user;
+export const analyzeJobMatch = TryCatch(async (req: AuthRequest, res: Response) => {
+  const user = req.user;
   if (!user) {
     throw new ErrorHandler(401, "Authentication required");
   }
