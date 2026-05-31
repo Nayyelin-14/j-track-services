@@ -1,6 +1,7 @@
 packages:
   - 'packages/*'
   - 'services/*'
+  - 'e2e'
 allowBuilds:
   '@google/genai': true
   bcrypt: true

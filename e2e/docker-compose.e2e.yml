@@ -1,0 +1,25 @@
+# E2E test infrastructure: overrides docker-compose.yml for testing
+# Usage: docker compose -f docker-compose.yml -f e2e/docker-compose.e2e.yml up -d
+services:
+  e2e-tests:
+    profiles: ["manual"]
+    build:
+      context: .
+      dockerfile: e2e/Dockerfile
+    environment:
+      E2E_BASE_URL: http://nginx-dev:80
+    depends_on:
+      auth-dev:
+        condition: service_started
+      user-dev:
+        condition: service_started
+      jobservice-dev:
+        condition: service_started
+      utils-dev:
+        condition: service_started
+      nginx-dev:
+        condition: service_started
+    volumes:
+      - ./e2e:/app/e2e
+      - shared_node_modules:/app/node_modules
+    command: ["pnpm", "--filter", "e2e", "test"]
