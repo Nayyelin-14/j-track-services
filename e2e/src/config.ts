@@ -53,6 +53,7 @@ export const ENDPOINTS = {
     APPLICATIONS_BY_JOB: (id: number) => `/api/jobs/applications-by-job/${id}`,
     APPLICATION: (id: number) => `/api/jobs/applications/${id}`,
     ANALYZE_MATCH: (jobId: number) => `/api/jobs/analyze-match/${jobId}`,
+    ANALYTICS: (jobId: number) => `/api/jobs/analytics/${jobId}`,
   },
   HEALTH: "/health",
 } as const;
