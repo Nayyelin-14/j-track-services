@@ -21,6 +21,9 @@
     "./kafka/producer": "./dist/kafka/producer.js",
     "./kafka/topic": "./dist/kafka/topic.js",
     "./kafka/types": "./dist/kafka/types.js",
+    "./kafka/events": "./dist/kafka/events.js",
+    "./kafka/config": "./dist/kafka/config.js",
+    "./kafka/consumer": "./dist/kafka/consumer.js",
     "./redis/helpers": "./dist/redis/helpers.js"
   },
   "devDependencies": {

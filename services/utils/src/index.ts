@@ -5,6 +5,7 @@ import aiRoutes from "./routes/ai.js";
 import analyzeRoute from "./routes/resume.js";
 import { v2 as cloudinary } from "cloudinary";
 import { createMailConsumer } from "./consumer.js";
+import { createNotificationConsumer } from "./notification-consumer.js";
 import { ensureTopic } from "@jtrack/shared/kafka/topic";
 
 function getEnv(name: string): string {
@@ -27,6 +28,8 @@ cloudinary.config({
 
 const mailConsumer = createMailConsumer();
 export { mailConsumer };
+const notificationConsumer = createNotificationConsumer();
+export { notificationConsumer };
 
 app.use("/api/utils", routes);
 app.use("/api/utils/ai/", aiRoutes);
@@ -35,19 +38,28 @@ app.use("/api/utils/ai", analyzeRoute);
 app.use(errorMiddleware);
 
 app.get("/health", async (_req, res) => {
-  const kafkaHealth = await mailConsumer.healthCheck();
-  const status = kafkaHealth.connected ? "healthy" : "degraded";
+  const [mailHealth, notifHealth] = await Promise.all([
+    mailConsumer.healthCheck(),
+    notificationConsumer.healthCheck(),
+  ]);
+  const allConnected = mailHealth.connected && notifHealth.connected;
 
-  res.status(status === "healthy" ? 200 : 503).json({
+  res.status(allConnected ? 200 : 503).json({
     service: "utils-service",
-    status,
-    kafka: kafkaHealth,
+    status: allConnected ? "healthy" : "degraded",
+    consumers: {
+      mail: mailHealth,
+      notification: notifHealth,
+    },
   });
 });
 
 async function gracefulShutdown() {
   console.log("\n[SIGTERM] Shutting down gracefully...");
-  await mailConsumer.stop().catch((err) => console.error("[Consumer] Stop error:", err));
+  await Promise.all([
+    mailConsumer.stop().catch((err) => console.error("[Mail Consumer] Stop error:", err)),
+    notificationConsumer.stop().catch((err) => console.error("[Notification Consumer] Stop error:", err)),
+  ]);
   console.log("[Shutdown] Complete");
   process.exit(0);
 }
@@ -61,8 +73,12 @@ async function startServer() {
   try {
     await ensureTopic("send-mail");
     await ensureTopic("send-mail-dlq");
+    await ensureTopic("job-events");
     await mailConsumer.start();
     console.log("[Mail Consumer] Started");
+
+    await notificationConsumer.start();
+    console.log("[Notification Consumer] Started");
 
     app.listen(PORT, () => {
       console.log(`[Utils Service] Running on port ${PORT}`);

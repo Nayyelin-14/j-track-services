@@ -1,41 +1,9 @@
 import { Kafka, Producer } from "kafkajs";
-import { MailMessage, ProducerInstance, KafkaHealth } from "./types";
+import { ProducerInstance, KafkaHealth } from "./types";
+import { sleep, resolveKafkaConfig } from "./config";
 
 const REGISTRY = new Map<string, { kafka: Kafka; producer: Producer; connected: boolean }>();
 const PENDING_CONNECTIONS = new Map<string, Promise<void>>();
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function resolveBrokers(): string[] {
-  return (process.env.KAFKA_BROKER || "localhost:9092").split(",").map((b) => b.trim());
-}
-
-type KafkaConfig = ConstructorParameters<typeof Kafka>[0];
-
-function buildConfig(clientId: string): KafkaConfig {
-  const config: KafkaConfig = {
-    clientId,
-    brokers: resolveBrokers(),
-    connectionTimeout: Number(process.env.KAFKA_CONNECTION_TIMEOUT) || 10000,
-    authenticationTimeout: Number(process.env.KAFKA_AUTH_TIMEOUT) || 10000,
-    retry: {
-      initialRetryTime: Number(process.env.KAFKA_RETRY_INITIAL_TIME) || 300,
-      retries: Number(process.env.KAFKA_RETRY_COUNT) || 10,
-    },
-  };
-
-  const saslMechanism = process.env.KAFKA_SASL_MECHANISM;
-  const saslUsername = process.env.KAFKA_SASL_USERNAME;
-  const saslPassword = process.env.KAFKA_SASL_PASSWORD;
-  if (saslMechanism && saslUsername && saslPassword) {
-    config.sasl = { mechanism: saslMechanism, username: saslUsername, password: saslPassword } as any;
-    config.ssl = true;
-  } else if (process.env.KAFKA_SSL === "true") {
-    config.ssl = true;
-  }
-
-  return config;
-}
 
 async function connectWithBackoff(producer: Producer, maxRetries = 5): Promise<void> {
   let lastError: Error | undefined;
@@ -60,7 +28,7 @@ export function getKafkaProducer(clientId: string): ProducerInstance {
     return buildInterface(clientId, existing);
   }
 
-  const config = buildConfig(clientId);
+  const config = resolveKafkaConfig(clientId);
   const kafka = new Kafka(config);
   const producer = kafka.producer();
   const state = { kafka, producer, connected: false };
@@ -90,7 +58,7 @@ function buildInterface(clientId: string, state: { kafka: Kafka; producer: Produ
       }
     },
 
-    async publish(topic: string, message: MailMessage): Promise<void> {
+    async publish<T = Record<string, unknown>>(topic: string, message: T): Promise<void> {
       if (!state.connected) {
         throw new Error("Kafka producer not connected. Call connect() first.");
       }
