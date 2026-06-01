@@ -41,6 +41,23 @@ interface ApplicationResponse {
   message?: string;
 }
 
+interface AnalyticsResponse {
+  success: boolean;
+  job_id: number;
+  title: string;
+  analytics: {
+    total_views: number;
+    total_applications: number;
+    total_status_changes: number;
+    daily: Array<{
+      date: string;
+      views: number;
+      applications: number;
+      status_changes: number;
+    }>;
+  };
+}
+
 describe("Jobs Module", () => {
   describe("Company CRUD", () => {
     it("recruiter creates a company", async () => {
@@ -367,6 +384,108 @@ describe("Jobs Module", () => {
         ENDPOINTS.JOBS.APPLICATION(1),
         { status: "Hired" },
         session.cookies,
+        jobs,
+      );
+
+      expect(status).toBe(403);
+    });
+  });
+
+  describe("Job Analytics", () => {
+    it("recruiter sees view and application analytics for their job", async () => {
+      const recruiterSession = await registerAndLogin(generateRecruiter());
+      const companyRes = await api.post<CompanyResponse>(
+        ENDPOINTS.JOBS.CREATE_COMPANY,
+        generateCompany(),
+        recruiterSession.cookies,
+        jobs,
+      );
+      const companyId = companyRes.body.company!.company_id;
+
+      const jobRes = await api.post<JobResponse>(
+        ENDPOINTS.JOBS.CREATE_JOB,
+        { ...generateJob({ title: "Analytics Test Position" }), company_id: companyId },
+        recruiterSession.cookies,
+        jobs,
+      );
+      const jobId = jobRes.body.job!.job_id;
+
+      // View the job detail (triggers job.viewed event)
+      const viewRes = await api.get(ENDPOINTS.JOBS.JOB_BY_ID(jobId), undefined, jobs);
+      expect(viewRes.status).toBe(200);
+
+      // Jobseeker applies (triggers job.applied event)
+      const jobseekerSession = await registerAndLogin(generateJobseeker());
+      await api.post(
+        ENDPOINTS.JOBS.APPLY,
+        { jobId },
+        jobseekerSession.cookies,
+        jobs,
+      );
+
+      // Check analytics
+      const analyticsRes = await api.get<AnalyticsResponse>(
+        ENDPOINTS.JOBS.ANALYTICS(jobId),
+        recruiterSession.cookies,
+        jobs,
+      );
+
+      expect(analyticsRes.status).toBe(200);
+      expect(analyticsRes.body.success).toBe(true);
+      expect(analyticsRes.body.job_id).toBe(jobId);
+      expect(analyticsRes.body.analytics.total_views).toBeGreaterThanOrEqual(1);
+      expect(analyticsRes.body.analytics.total_applications).toBeGreaterThanOrEqual(1);
+      expect(Array.isArray(analyticsRes.body.analytics.daily)).toBe(true);
+    });
+
+    it("prevents non-owner from viewing analytics", async () => {
+      const recruiterSession = await registerAndLogin(generateRecruiter());
+      const companyRes = await api.post<CompanyResponse>(
+        ENDPOINTS.JOBS.CREATE_COMPANY,
+        generateCompany(),
+        recruiterSession.cookies,
+        jobs,
+      );
+      const companyId = companyRes.body.company!.company_id;
+
+      const jobRes = await api.post<JobResponse>(
+        ENDPOINTS.JOBS.CREATE_JOB,
+        { ...generateJob(), company_id: companyId },
+        recruiterSession.cookies,
+        jobs,
+      );
+      const jobId = jobRes.body.job!.job_id;
+
+      const otherRecruiter = await registerAndLogin(generateRecruiter());
+      const { status, body } = await api.get(
+        ENDPOINTS.JOBS.ANALYTICS(jobId),
+        otherRecruiter.cookies,
+        jobs,
+      );
+
+      expect(status).toBe(403);
+    });
+
+    it("rejects analytics from jobseeker", async () => {
+      const recruiterSession = await registerAndLogin(generateRecruiter());
+      const companyRes = await api.post<CompanyResponse>(
+        ENDPOINTS.JOBS.CREATE_COMPANY,
+        generateCompany(),
+        recruiterSession.cookies,
+        jobs,
+      );
+      const jobRes = await api.post<JobResponse>(
+        ENDPOINTS.JOBS.CREATE_JOB,
+        { ...generateJob(), company_id: companyRes.body.company!.company_id },
+        recruiterSession.cookies,
+        jobs,
+      );
+      const jobId = jobRes.body.job!.job_id;
+
+      const jobseekerSession = await registerAndLogin(generateJobseeker());
+      const { status } = await api.get(
+        ENDPOINTS.JOBS.ANALYTICS(jobId),
+        jobseekerSession.cookies,
         jobs,
       );
 

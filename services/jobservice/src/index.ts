@@ -5,6 +5,7 @@ import { redisClient } from "./redis.js";
 import { kafka } from "./kafka.js";
 import { ensureTopic } from "@jtrack/shared/kafka/topic";
 import type { KafkaHealth } from "@jtrack/shared/kafka/types";
+import { createAnalyticsConsumer } from "./analytics/consumer.js";
 
 async function connectRedis() {
   const maxRetries = 5;
@@ -86,6 +87,17 @@ async function initDB() {
     )
   `;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS job_analytics (
+      job_id          INTEGER NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+      date            DATE NOT NULL DEFAULT CURRENT_DATE,
+      views           INTEGER NOT NULL DEFAULT 0,
+      applications    INTEGER NOT NULL DEFAULT 0,
+      status_changes  INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (job_id, date)
+    )
+  `;
+
   console.log("[DB] Initialized");
 }
 
@@ -105,11 +117,14 @@ app.get("/health", async (_req, res) => {
   });
 });
 
+let analyticsConsumer: ReturnType<typeof createAnalyticsConsumer> | null = null;
+
 async function gracefulShutdown() {
   console.log("\n[SIGTERM] Shutting down gracefully...");
   await Promise.all([
     kafka.disconnect().catch((err: unknown) => console.error("[Kafka] Disconnect error:", err)),
     redisClient.quit().catch((err: unknown) => console.error("[Redis] Quit error:", err)),
+    analyticsConsumer?.stop().catch((err: unknown) => console.error("[Analytics] Stop error:", err)),
   ]);
   console.log("[Shutdown] Complete");
   process.exit(0);
@@ -125,8 +140,12 @@ async function startServer() {
     await connectRedis();
     await initDB();
     await ensureTopic("send-mail");
+    await ensureTopic("job-events");
     await kafka.connect();
     console.log("[Kafka] Producer connected (job-service)");
+
+    analyticsConsumer = createAnalyticsConsumer();
+    await analyticsConsumer.start();
 
     app.listen(PORT, () => {
       console.log(`[Job Service] Running on port ${PORT}`);

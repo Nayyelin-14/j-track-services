@@ -7,7 +7,7 @@ const mockRedisGet = vi.fn();
 const mockRedisDel = vi.fn();
 const mockRedisKeys = vi.fn();
 const mockRedisSetEx = vi.fn();
-const mockKafkaPublish = vi.fn();
+const mockKafkaPublish = vi.fn(() => Promise.resolve());
 const mockGetBuffer = vi.fn((f: any) => ({ content: f?.buffer ?? "datauri" }));
 
 vi.mock("@jtrack/shared/db", () => ({ sql: mockSql }));

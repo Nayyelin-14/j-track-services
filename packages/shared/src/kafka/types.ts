@@ -17,7 +17,7 @@ export interface KafkaHealth {
 
 export interface ProducerInstance {
   connect(): Promise<void>;
-  publish(topic: string, message: MailMessage): Promise<void>;
+  publish<T = Record<string, unknown>>(topic: string, message: T): Promise<void>;
   disconnect(): Promise<void>;
   isConnected(): boolean;
   healthCheck(): Promise<KafkaHealth>;

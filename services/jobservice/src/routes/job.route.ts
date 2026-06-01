@@ -22,6 +22,7 @@ import {
   updateJobApplication,
 } from "../controllers/applications.controller.js";
 import { analyzeJobMatch } from "../controllers/match.con.js";
+import { getJobAnalytics } from "../controllers/analytics.controller.js";
 
 const router = Router();
 const upload = multer({
@@ -29,7 +30,6 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 
-// ── Companies ────────────────────────────────────────────────────────────
 router.post(
   "/create-com",
   isAuthenticated,
@@ -43,7 +43,6 @@ router.get("/:company_id", getCompanyById);
 router.get("/detail/:company_id", isAuthenticated, getCompanyDetail);
 router.delete("/:id", isAuthenticated, deleteCompany);
 
-// ── Jobs ─────────────────────────────────────────────────────────────────
 router.post("/create-job", isAuthenticated, createJob);
 router.delete("/jobs/:job_id", isAuthenticated, deleteJob);
 router.patch("/jobs/:job_id", isAuthenticated, updateJob);
@@ -62,5 +61,7 @@ router.patch(
 );
 
 router.post("/analyze-match/:jobId", isAuthenticated, analyzeJobMatch);
+
+router.get("/analytics/:job_id", isAuthenticated, getJobAnalytics);
 
 export default router;

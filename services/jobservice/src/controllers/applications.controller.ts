@@ -86,6 +86,15 @@ export const applyJob = TryCatch(
       console.error("[Redis] Cache invalidation error (non-fatal):", err);
     }
 
+    kafka.publish("job-events", {
+      type: "job.applied",
+      job_id: newApplication.job_id,
+      applicant_id,
+      applied_at: new Date().toISOString(),
+    }).catch((err: unknown) =>
+      console.error("[Kafka] Failed to publish job.applied event:", err),
+    );
+
     return res.status(200).json({
       success: true,
       message: "Application submitted successfully",
@@ -354,6 +363,16 @@ export const updateJobApplication = TryCatch(
       }),
     }).catch((err) =>
       console.error("[Kafka] Publish failed (non-fatal):", err),
+    );
+
+    kafka.publish("job-events", {
+      type: "application.status_changed",
+      job_id: application.job_id,
+      application_id,
+      new_status: status,
+      timestamp: new Date().toISOString(),
+    }).catch((err: unknown) =>
+      console.error("[Kafka] Failed to publish application.status_changed event:", err),
     );
 
     try {

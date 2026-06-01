@@ -40,15 +40,16 @@ A pnpm monorepo powering a job marketplace with JWT-authenticated REST APIs, AI-
        │   │   Nodemailer (email consumer)    │
        │   └─────────────────────────────────┘
        │
-       │         ┌──────────────────────┐
-       ├────────►│   Apache Kafka        │
-       │(send-mail│                      │
-       │         └──────────┬───────────┘
-       │                    │
-       │         ┌──────────▼──────────┐
-       ├────────►│   PostgreSQL (Neon)  │
-       │         │                     │
-       │         └─────────────────────┘
+        │         ┌──────────────────────┐
+        ├────────►│   Apache Kafka        │
+        │         │  send-mail            │
+        │         │  job-events           │
+        │         └──────────┬───────────┘
+        │                    │
+        │         ┌──────────▼──────────┐
+        ├────────►│   PostgreSQL (Neon)  │
+        │         │  + job_analytics     │
+        │         └─────────────────────┘
        │
        │         ┌─────────────────────┐
        ├────────►│   Redis              │
@@ -62,6 +63,7 @@ A pnpm monorepo powering a job marketplace with JWT-authenticated REST APIs, AI-
 |---------|-----------|----------|
 | **Synchronous** | HTTP REST (internal) | Auth/User/Job → Utils for file uploads & AI analysis via `UTILS_SERVICE_URL` |
 | **Asynchronous** | Apache Kafka | Auth/Job → `send-mail` topic → Utils consumer → Nodemailer SMTP |
+| **Event-driven** | Apache Kafka | Job service → `job-events` topic → analytics consumer (DB aggregation) + notification consumer (recruiter alerts) |
 | **Shared Library** | `@jtrack/shared` workspace package | Database client, JWT utilities, auth middleware, error handling, Kafka/Redis helpers |
 
 ---
@@ -222,9 +224,10 @@ Companies, jobs, applications, and match analysis.
 | `/api/jobs/applications-by-job/:job_id` | GET | Yes | Recruiter view of applications |
 | `/api/jobs/applications/:application_id` | PATCH | Yes | Update application status |
 | `/api/jobs/analyze-match/:jobId` | POST | Yes | SSE match analysis (internally calls Utils) |
+| `/api/jobs/analytics/:job_id` | GET | Yes | Recruiter dashboard: daily views, applications, status changes |
 | `/health` | GET | No | Health check (DB, Redis, Kafka) |
 
-**Owns tables:** `companies`, `jobs`, `applications`
+**Owns tables:** `companies`, `jobs`, `applications`, `job_analytics`
 
 ### Utils Service (`:6001`)
 
@@ -239,7 +242,9 @@ AI-powered utilities, file storage, email delivery.
 | `/api/utils/ai/analyze` | POST | No | SSE resume analysis (Groq) — rate-limited |
 | `/api/utils/ai/generate` | POST | No | Test Gemini prompt — rate-limited |
 
-**Kafka consumer:** Listens on `send-mail` topic → sends email via Nodemailer. Failed deliveries routed to `send-mail-dlq`.
+**Kafka consumers:**
+- `mail-service-group` — listens on `send-mail` topic → sends email via Nodemailer. Failed deliveries routed to `send-mail-dlq`.
+- `notification-group` — listens on `job-events` topic → sends new application alerts to recruiters.
 
 ---
 
@@ -365,6 +370,8 @@ Reusable modules consumed by all services via `"@jtrack/shared": "workspace:*"`:
 | `kafka/producer` | `getKafkaProducer` | Kafka producer singleton |
 | `kafka/topic` | `ensureTopic`, `listTopics` | Topic management |
 | `kafka/types` | `MailMessage`, `KafkaHealth`, `ProducerInstance` | Type definitions |
+| `kafka/config` | `resolveKafkaConfig`, `sleep` | Shared Kafka config builder |
+| `kafka/consumer` | `checkKafkaHealth` | Consumer health check helper |
 | `redis/helpers` | `createRedisHelpers` | Generic Redis get/set/delete + rate limiting |
 
 ---
@@ -373,7 +380,7 @@ Reusable modules consumed by all services via `"@jtrack/shared": "workspace:*"`:
 
 - **HTTP-only cookies for JWT** — access and refresh tokens stored in secure, httpOnly, sameSite cookies. Prevents XSS token exfiltration. Access token auto-refreshes via `isAuthenticated` middleware when expired but refresh token is valid.
 - **SSE for AI responses** — career guidance, match analysis, and resume scoring stream tokens in real-time via Server-Sent Events rather than blocking on long-running AI inference.
-- **Kafka for async email** — password resets and application status notifications are published to `send-mail` topic. The utils service consumes asynchronously, decoupling email delivery from request-response cycles. Failed deliveries go to `send-mail-dlq` dead-letter queue.
+- **Kafka for event-driven analytics** — job views, applications, and status changes are published as structured events to the `job-events` topic. Two independent consumer groups process the same stream: the analytics consumer (job service) aggregates daily counts into `job_analytics`, and the notification consumer (utils service) sends real-time recruiter alerts. This demonstrates the Kafka pattern of one event → multiple reactions.
 - **Internal service HTTP calls** — auth, user, and job services call the utils service directly for file uploads and AI analysis. The utils service does not expose auth middleware externally, relying on network-level isolation. Endpoints are rate-limited instead.
 - **pnpm workspaces** — strict dependency isolation with the `.pnpm` virtual store. Dependencies are deduplicated and hoisted only as configured via `.npmrc`.
 - **Redis caching** — user profiles cached for 5 minutes; active jobs and job details cached with TTL. Cache invalidation on writes.
@@ -429,8 +436,9 @@ j-track-services/
 
 | Topic | Producer | Consumer | Purpose |
 |-------|----------|----------|---------|
-| `send-mail` | Auth, Job | Utils | Password resets, application status |
+| `send-mail` | Auth, Job | Utils (mail-service-group) | Password resets, application status |
 | `send-mail-dlq` | Utils | — | Dead-letter queue for failed sends |
+| `job-events` | Job | Job (job-analytics-group), Utils (notification-group) | Job view/app/status tracking, recruiter alerts |
 
 ---
 

@@ -3,6 +3,7 @@ import { sql } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
+import { kafka } from "../kafka.js";
 import { redisClient } from "../redis.js";
 import {
   CACHE_KEYS,
@@ -481,6 +482,15 @@ export const getJobById = TryCatch(
     } catch (err) {
       console.error("[Redis] Cache write error (non-fatal):", err);
     }
+
+    kafka.publish("job-events", {
+      type: "job.viewed",
+      job_id: job.job_id,
+      viewer_id: (req as AuthRequest).user?.user_id,
+      viewed_at: new Date().toISOString(),
+    }).catch((err: unknown) =>
+      console.error("[Kafka] Failed to publish job.viewed event:", err),
+    );
 
     return res.status(200).json({
       success: true,
