@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { api } from "./client.ts";
+import { api, type ApiResponse } from "./client.ts";
 import { ENDPOINTS, type ServiceName } from "./config.ts";
 import { registerAndLogin } from "./helpers.ts";
 import { generateRecruiter, generateJobseeker, generateCompany, generateJob } from "./fixtures.ts";
@@ -423,19 +423,24 @@ describe("Jobs Module", () => {
         jobs,
       );
 
-      // Check analytics
-      const analyticsRes = await api.get<AnalyticsResponse>(
-        ENDPOINTS.JOBS.ANALYTICS(jobId),
-        recruiterSession.cookies,
-        jobs,
-      );
+      // Wait for Kafka consumer to process events
+      let analyticsRes: ApiResponse<AnalyticsResponse>;
+      for (let i = 0; i < 20; i++) {
+        analyticsRes = await api.get<AnalyticsResponse>(
+          ENDPOINTS.JOBS.ANALYTICS(jobId),
+          recruiterSession.cookies,
+          jobs,
+        );
+        if (analyticsRes.body.analytics?.total_applications >= 1) break;
+        await new Promise(r => setTimeout(r, 250));
+      }
 
-      expect(analyticsRes.status).toBe(200);
-      expect(analyticsRes.body.success).toBe(true);
-      expect(analyticsRes.body.job_id).toBe(jobId);
-      expect(analyticsRes.body.analytics.total_views).toBeGreaterThanOrEqual(1);
-      expect(analyticsRes.body.analytics.total_applications).toBeGreaterThanOrEqual(1);
-      expect(Array.isArray(analyticsRes.body.analytics.daily)).toBe(true);
+      expect(analyticsRes!.status).toBe(200);
+      expect(analyticsRes!.body.success).toBe(true);
+      expect(analyticsRes!.body.job_id).toBe(jobId);
+      expect(analyticsRes!.body.analytics.total_views).toBeGreaterThanOrEqual(1);
+      expect(analyticsRes!.body.analytics.total_applications).toBeGreaterThanOrEqual(1);
+      expect(Array.isArray(analyticsRes!.body.analytics.daily)).toBe(true);
     });
 
     it("prevents non-owner from viewing analytics", async () => {
