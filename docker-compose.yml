@@ -45,8 +45,6 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    ports:
-      - "7000:7000"
     env_file: .env
     environment:
       PORT: 7000
@@ -63,8 +61,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    ports:
-      - "7001:7001"
     env_file: .env
     environment:
       PORT: 7001
@@ -82,8 +78,6 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    ports:
-      - "7002:7002"
     env_file: .env
     environment:
       PORT: 7002
@@ -100,8 +94,6 @@ services:
     depends_on:
       kafka:
         condition: service_started
-    ports:
-      - "6001:6001"
     env_file: .env
     environment:
       PORT: 6001

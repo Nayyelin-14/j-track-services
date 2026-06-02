@@ -23,3 +23,6 @@ services:
       - ./e2e:/app/e2e
       - shared_node_modules:/app/node_modules
     command: ["pnpm", "--filter", "e2e", "test"]
+
+volumes:
+  shared_node_modules:
