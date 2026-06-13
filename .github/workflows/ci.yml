@@ -151,6 +151,7 @@ jobs:
           POSTGRES_DB: jtrack
           POSTGRES_USER: jtrack
           POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -196,6 +197,7 @@ jobs:
           POSTGRES_DB: jtrack
           POSTGRES_USER: jtrack
           POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -249,6 +251,7 @@ jobs:
           POSTGRES_DB: jtrack
           POSTGRES_USER: jtrack
           POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
