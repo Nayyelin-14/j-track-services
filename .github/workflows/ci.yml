@@ -64,6 +64,7 @@ jobs:
     outputs:
       any: ${{ steps.filter.outputs.any }}
       services: ${{ steps.set-matrix.outputs.services }}
+      e2e: ${{ steps.filter.outputs.e2e }}
 
     steps:
       - uses: actions/checkout@v4
@@ -96,6 +97,12 @@ jobs:
               - 'eslint.config.js'
               - '.github/workflows/**'
               - 'docker-compose*.yml'
+            e2e:
+              - 'e2e/**'
+              - 'services/**'
+              - 'packages/shared/**'
+              - 'pnpm-lock.yaml'
+              - '.github/workflows/ci.yml'
 
       - name: Build dynamic matrix
         id: set-matrix
@@ -187,7 +194,7 @@ jobs:
           path: services/${{ matrix.service }}/coverage/
 
   integration-test:
-    if: needs.changes.outputs.any == 'true'
+    if: needs.changes.outputs.e2e == 'true'
     needs: [changes, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -237,8 +244,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      - name: Start services
-        run: pnpm -r build
+      - name: Build all services
+        run: pnpm -r --filter auth --filter user --filter jobservice --filter utils build
+      - name: Start all services in background
+        run: |
+          node services/auth/dist/index.js &
+          node services/user/dist/index.js &
+          node services/jobservice/dist/index.js &
+          node services/utils/dist/index.js &
+          sleep 4
+      - name: Wait for services to be ready
+        run: |
+          for port in 7000 7001 7002 6001; do
+            for i in $(seq 1 30); do
+              resp=$(curl -sf "http://localhost:$port/health" 2>&1)
+              if [ $? -eq 0 ]; then
+                echo "✓ Service on port $port ready"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "✗ Service on port $port failed to start after 60s"
+                echo "  Last response: $resp"
+                exit 1
+              fi
+              echo "  Waiting for port $port (attempt $i/30)..."
+              sleep 2
+            done
+          done
       - name: Run e2e tests
         run: pnpm --filter e2e test
 
