@@ -1,3 +1,5 @@
+# For other developers: everything runs locally in Docker.
+# No cloud accounts needed — uses local Redis + Kafka.
 services:
   redis:
     image: redis:7-alpine
@@ -39,7 +41,6 @@ services:
       context: .
       dockerfile: services/auth/Dockerfile
     container_name: jtrack-auth
-    restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
@@ -57,7 +58,6 @@ services:
       context: .
       dockerfile: services/user/Dockerfile
     container_name: jtrack-user
-    restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
@@ -72,7 +72,6 @@ services:
       context: .
       dockerfile: services/jobservice/Dockerfile
     container_name: jtrack-job
-    restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
@@ -90,7 +89,6 @@ services:
       context: .
       dockerfile: services/utils/Dockerfile
     container_name: jtrack-utils
-    restart: unless-stopped
     depends_on:
       kafka:
         condition: service_started
@@ -102,16 +100,13 @@ services:
   nginx:
     build:
       context: ./nginx
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile
     container_name: jtrack-nginx
     restart: unless-stopped
     ports:
       - "80:80"
-      - "443:443"
     volumes:
-      - ./nginx/prod/conf.d/default.conf:/etc/nginx/conf.d/default.conf
-      - ./nginx/ssl/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
-      - ./nginx/ssl/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
+      - ./nginx/compose/conf.d/default.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - auth
       - user

@@ -68,7 +68,7 @@ process.on("SIGTERM", gracefulShutdown);
 process.on("SIGINT", gracefulShutdown);
 
 async function startServer() {
-  const PORT = process.env.PORT || 6001;
+  const PORT = Number(process.env.PORT) || 6001;
 
   try {
     await ensureTopic("send-mail");
@@ -80,7 +80,7 @@ async function startServer() {
     await notificationConsumer.start();
     console.log("[Notification Consumer] Started");
 
-    app.listen(PORT, () => {
+    app.listen(PORT, "0.0.0.0", () => {
       console.log(`[Utils Service] Running on port ${PORT}`);
     });
   } catch (err) {

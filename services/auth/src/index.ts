@@ -109,7 +109,7 @@ process.on("SIGTERM", gracefulShutdown);
 process.on("SIGINT", gracefulShutdown);
 
 async function startServer() {
-  const PORT = process.env.PORT || 7000;
+  const PORT = Number(process.env.PORT) || 7000;
 
   try {
     await connectRedis();
@@ -118,7 +118,7 @@ async function startServer() {
     await kafka.connect();
     console.log("[Kafka] Producer connected (auth-service)");
 
-    app.listen(PORT, () => {
+    app.listen(PORT, "0.0.0.0", () => {
       console.log(`[Auth Service] Running on port ${PORT}`);
     });
   } catch (err) {

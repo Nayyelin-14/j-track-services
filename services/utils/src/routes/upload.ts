@@ -33,7 +33,7 @@ router.post(
     const result = await cloudinary.uploader.upload(buffer, {
       folder: "j-track",
       resource_type: "auto",
-      allowed_formats: ["jpg", "jpeg", "png", "webp"],
+      allowed_formats: ["jpg", "jpeg", "png", "webp", "pdf"],
       transformation: [{ width: 800, height: 800, crop: "limit" }],
     });
 

@@ -31,13 +31,14 @@ export const CACHE_KEYS = {
   applicationsByJob: (id: number) => `applications:job:${id}`,
 };
 
+const JOBS_LIST_VERSION_KEY = "jobs:list:version";
+const COMPANIES_LIST_VERSION_KEY = "companies:list:version";
+
 export const invalidateJobsCache = async (job_id?: number) => {
   try {
-    for await (const key of redisClient.scanIterator({ MATCH: "jobs:active:*" })) {
-      await redisClient.del(key);
-    }
+    await redisClient.incr(JOBS_LIST_VERSION_KEY);
   } catch (err) {
-    console.error("[Redis] Cache invalidation error (non-fatal):", err);
+    console.error("[Redis] Cache version increment error (non-fatal):", err);
   }
 
   if (job_id) {
@@ -51,15 +52,30 @@ export const invalidateJobsCache = async (job_id?: number) => {
 
 export const invalidateCompaniesCache = async (company_id?: number) => {
   try {
-    await redisClient.del(CACHE_KEYS.companies);
-    if (company_id) {
+    await redisClient.incr(COMPANIES_LIST_VERSION_KEY);
+  } catch (err) {
+    console.error("[Redis] Cache version increment error (non-fatal):", err);
+  }
+
+  if (company_id) {
+    try {
       await redisClient.del(CACHE_KEYS.company(company_id));
       await redisClient.del(CACHE_KEYS.companyDetail(company_id));
+    } catch (err) {
+      console.error("[Redis] Cache invalidation error (non-fatal):", err);
     }
-  } catch (err) {
-    console.error("[Redis] Cache invalidation error (non-fatal):", err);
   }
 };
+
+async function getListVersion(versionKey: string): Promise<string> {
+  try {
+    return (await redisClient.get(versionKey)) ?? "0";
+  } catch {
+    return "0";
+  }
+}
+
+export { JOBS_LIST_VERSION_KEY, COMPANIES_LIST_VERSION_KEY, getListVersion };
 
 export const sanitize = (val: unknown, field: string, max: number): string => {
   if (typeof val !== "string" || !val.trim()) {
