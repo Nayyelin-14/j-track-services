@@ -102,16 +102,16 @@ jobs:
         run: |
           services='[]'
           if [[ '${{ steps.filter.outputs.auth }}' == 'true' ]]; then
-            services=$(echo "$services" | jq '. + ["auth"]')
+            services=$(echo "$services" | jq -c '. + ["auth"]')
           fi
           if [[ '${{ steps.filter.outputs.user }}' == 'true' ]]; then
-            services=$(echo "$services" | jq '. + ["user"]')
+            services=$(echo "$services" | jq -c '. + ["user"]')
           fi
           if [[ '${{ steps.filter.outputs.jobservice }}' == 'true' ]]; then
-            services=$(echo "$services" | jq '. + ["jobservice"]')
+            services=$(echo "$services" | jq -c '. + ["jobservice"]')
           fi
           if [[ '${{ steps.filter.outputs.utils }}' == 'true' ]]; then
-            services=$(echo "$services" | jq '. + ["utils"]')
+            services=$(echo "$services" | jq -c '. + ["utils"]')
           fi
           echo "services=$services" >> "$GITHUB_OUTPUT"
 
