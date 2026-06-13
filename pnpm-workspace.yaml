@@ -5,5 +5,5 @@ packages:
 allowBuilds:
   '@google/genai': true
   bcrypt: true
+  esbuild: true
   protobufjs: true
-

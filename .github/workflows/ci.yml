@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -13,7 +15,7 @@ defaults:
     shell: bash
 
 env:
-  DB_URL: ${{ secrets.DB_URL }}
+  DB_URL: postgresql://jtrack:${{ secrets.DB_PASSWORD }}@localhost:5432/jtrack
   REDIS_URL: redis://localhost:6379
   KAFKA_BROKER: localhost:9092
   UTILS_SERVICE_URL: http://localhost:6001/api/utils
@@ -60,12 +62,9 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      auth: ${{ steps.filter.outputs.auth }}
-      user: ${{ steps.filter.outputs.user }}
-      jobservice: ${{ steps.filter.outputs.jobservice }}
-      utils: ${{ steps.filter.outputs.utils }}
-      shared: ${{ steps.filter.outputs.shared }}
       any: ${{ steps.filter.outputs.any }}
+      services: ${{ steps.set-matrix.outputs.services }}
+      e2e: ${{ steps.filter.outputs.e2e }}
 
     steps:
       - uses: actions/checkout@v4
@@ -76,8 +75,6 @@ jobs:
         id: filter
         with:
           filters: |
-            shared:
-              - 'packages/shared/**'
             auth:
               - 'services/auth/**'
               - 'packages/shared/**'
@@ -93,28 +90,122 @@ jobs:
             any:
               - 'services/**'
               - 'packages/**'
+              - 'pnpm-lock.yaml'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - '.npmrc'
+              - 'eslint.config.js'
+              - '.github/workflows/**'
+              - 'docker-compose*.yml'
+            e2e:
+              - 'e2e/**'
+              - 'services/**'
+              - 'packages/shared/**'
+              - 'pnpm-lock.yaml'
+              - '.github/workflows/ci.yml'
+
+      - name: Build dynamic matrix
+        id: set-matrix
+        run: |
+          services='[]'
+          if [[ '${{ steps.filter.outputs.auth }}' == 'true' ]]; then
+            services=$(echo "$services" | jq -c '. + ["auth"]')
+          fi
+          if [[ '${{ steps.filter.outputs.user }}' == 'true' ]]; then
+            services=$(echo "$services" | jq -c '. + ["user"]')
+          fi
+          if [[ '${{ steps.filter.outputs.jobservice }}' == 'true' ]]; then
+            services=$(echo "$services" | jq -c '. + ["jobservice"]')
+          fi
+          if [[ '${{ steps.filter.outputs.utils }}' == 'true' ]]; then
+            services=$(echo "$services" | jq -c '. + ["utils"]')
+          fi
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Policy: moderate/low vulnerabilities tracked by Dependabot (see .github/dependabot.yml)
+      - name: pnpm audit
+        run: pnpm audit --audit-level=high
 
   build:
     needs: changes
     if: needs.changes.outputs.any == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        service:
-          - { name: auth, dir: services/auth }
-          - { name: user, dir: services/user }
-          - { name: jobservice, dir: services/jobservice }
-          - { name: utils, dir: services/utils }
-
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
     services:
       postgres:
         image: postgres:15
         env:
           POSTGRES_DB: jtrack
           POSTGRES_USER: jtrack
-          POSTGRES_PASSWORD: jtrack123
+          POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jtrack"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Build ${{ matrix.service }}
+        run: pnpm --filter ${{ matrix.service }} build
+      - name: Lint ${{ matrix.service }}
+        run: pnpm --filter ${{ matrix.service }} lint
+      - name: Type-check ${{ matrix.service }}
+        run: pnpm --filter ${{ matrix.service }} exec tsc --noEmit
+      - name: Test ${{ matrix.service }}
+        run: pnpm --filter ${{ matrix.service }} test -- --run --coverage
+      - if: always()
+        name: Upload coverage ${{ matrix.service }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.service }}
+          path: services/${{ matrix.service }}/coverage/
+
+  integration-test:
+    if: needs.changes.outputs.e2e == 'true'
+    needs: [changes, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: jtrack
+          POSTGRES_USER: jtrack
+          POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -150,78 +241,171 @@ jobs:
           --health-interval 10s
           --health-timeout 10s
           --health-retries 5
-
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Build all services
+        run: pnpm -r --filter auth --filter user --filter jobservice --filter utils build
+      - name: Start all services in background
+        run: |
+          node services/auth/dist/index.js &
+          node services/user/dist/index.js &
+          node services/jobservice/dist/index.js &
+          node services/utils/dist/index.js &
+          sleep 4
+      - name: Wait for services to be ready
+        run: |
+          for port in 7000 7001 7002 6001; do
+            for i in $(seq 1 30); do
+              resp=$(curl -sf "http://localhost:$port/health" 2>&1)
+              if [ $? -eq 0 ]; then
+                echo "✓ Service on port $port ready"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "✗ Service on port $port failed to start after 60s"
+                echo "  Last response: $resp"
+                exit 1
+              fi
+              echo "  Waiting for port $port (attempt $i/30)..."
+              sleep 2
+            done
+          done
+      - name: Run e2e tests
+        run: pnpm --filter e2e test
 
-      - uses: pnpm/action-setup@v4
+  docker-build:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [changes, build, integration-test]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: jtrack
+          POSTGRES_USER: jtrack
+          POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jtrack"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      kafka:
+        image: apache/kafka:4.2.0
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-topics.sh --list --bootstrap-server localhost:9092"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 5
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          version: 9
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build image
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.service }}"
+          docker build -t "$IMAGE:${{ github.sha }}" -f "services/${{ matrix.service }}/Dockerfile" .
 
-      - uses: actions/setup-node@v4
+      - name: Smoke test
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}"
+          echo "Starting container..."
+          CID=$(docker run -d --network host \
+            -e DB_URL="$DB_URL" \
+            -e REDIS_URL="$REDIS_URL" \
+            -e KAFKA_BROKER="$KAFKA_BROKER" \
+            -e JWT_ACCESS_SECRET="$JWT_ACCESS_SECRET" \
+            -e JWT_REFRESH_SECRET="$JWT_REFRESH_SECRET" \
+            -e JWT_RESET_SECRET="$JWT_RESET_SECRET" \
+            -e UTILS_SERVICE_URL="$UTILS_SERVICE_URL" \
+            -e FRONTEND_URL="$FRONTEND_URL" \
+            "$IMAGE")
+          sleep 30
+          echo "--- Container logs ---"
+          docker logs "$CID" 2>&1 || true
+          echo "--- End logs ---"
+          RUNNING=$(docker inspect --format='{{.State.Running}}' "$CID" 2>/dev/null || echo "false")
+          docker stop "$CID" > /dev/null 2>&1 || true
+          docker rm "$CID" > /dev/null 2>&1 || true
+          if [[ "$RUNNING" != "true" ]]; then
+            echo "::error::Container crashed on startup — app initialization failed"
+            exit 1
+          fi
+          echo "✓ Container started and stayed alive"
+
+      - name: Scan with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
         with:
-          node-version: 20
-          cache: pnpm
+          image-ref: ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
+          exit-code: 0
+          severity: CRITICAL,HIGH
 
-      - name: Cache pnpm node_modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            packages/shared/node_modules
-            services/*/node_modules
-          key: modules-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: modules-
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Cache shared build
-        uses: actions/cache@v4
-        with:
-          path: packages/shared/dist
-          key: shared-${{ hashFiles('packages/shared/src/**') }}
-          restore-keys: shared-
-
-      - name: Build shared library
-        run: pnpm --filter @jtrack/shared build
-
-      - if: needs.changes.outputs[matrix.service.name] == 'true'
-        name: Build ${{ matrix.service.name }}
-        run: pnpm --filter ${{ matrix.service.name }} build
-
-      - if: needs.changes.outputs[matrix.service.name] == 'true'
-        name: Lint ${{ matrix.service.name }}
-        run: pnpm --filter ${{ matrix.service.name }} lint
-
-      - if: needs.changes.outputs[matrix.service.name] == 'true'
-        name: Type-check ${{ matrix.service.name }}
-        run: pnpm --filter ${{ matrix.service.name }} exec tsc --noEmit
-
-      - if: needs.changes.outputs[matrix.service.name] == 'true'
-        name: Test ${{ matrix.service.name }}
-        run: pnpm --filter ${{ matrix.service.name }} test -- --run --coverage
-
-      - if: always() && needs.changes.outputs[matrix.service.name] == 'true'
-        name: Upload coverage ${{ matrix.service.name }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-${{ matrix.service.name }}
-          path: ${{ matrix.service.dir }}/coverage/
-
-      - if: needs.changes.outputs[matrix.service.name] == 'true'
-        name: Build Docker image
-        run: docker build -t ${{ matrix.service.name }}:ci -f ${{ matrix.service.dir }}/Dockerfile .
+      - name: Push to registry
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.service }}"
+          docker push "$IMAGE:${{ github.sha }}"
+          docker tag "$IMAGE:${{ github.sha }}" "$IMAGE:latest"
+          docker push "$IMAGE:latest"
 
   ci-passed:
     if: always()
-    needs: build
+    needs:
+      - infra-check
+      - audit
+      - build
+      - integration-test
+      - docker-build
     runs-on: ubuntu-latest
     steps:
-      - name: Check build result
+      - name: Check results
         run: |
-          result="${{ needs.build.result }}"
-          if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
-            echo "CI failed (result: $result)"
+          failed=""
+          check() {
+            local name="$1" result="$2"
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              echo "::error::$name: $result"
+              failed="$failed $name"
+            fi
+          }
+          check infra-check "${{ needs.infra-check.result }}"
+          check audit "${{ needs.audit.result }}"
+          check build "${{ needs.build.result }}"
+          check integration-test "${{ needs.integration-test.result }}"
+          check docker-build "${{ needs.docker-build.result }}"
+          if [[ -n "$failed" ]]; then
+            echo "CI failed on:$failed"
             exit 1
           fi
           echo "CI passed"

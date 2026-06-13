@@ -1,0 +1,27 @@
+name: Setup
+description: Checkout, install deps, build shared lib, init DB schema
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 9
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: pnpm
+
+    - run: pnpm install --frozen-lockfile
+      shell: bash
+
+    - name: Build shared library
+      run: pnpm --filter @jtrack/shared build
+      shell: bash
+
+    - name: Init DB schema
+      run: pnpm --filter auth exec tsx src/init-db.ts
+      shell: bash
