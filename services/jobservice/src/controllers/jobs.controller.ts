@@ -15,6 +15,8 @@ import {
   WORK_LOCATIONS,
   JobType,
   WorkLocation,
+  JOBS_LIST_VERSION_KEY,
+  getListVersion,
 } from "./utils.js";
 
 export const createJob = TryCatch(
@@ -341,75 +343,88 @@ export const getAllActiveJobs = TryCatch(
       location?: string;
     };
 
-    const cacheKey = `jobs:active:title=${title ?? ""};location=${location ?? ""}`;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+    const offset = (page - 1) * limit;
+
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    let paramIdx = 0;
+
+    if (title) {
+      paramIdx++;
+      filters.push(`j.title ILIKE $${paramIdx}`);
+      params.push(`%${title}%`);
+    }
+
+    if (location) {
+      paramIdx++;
+      filters.push(`j.location ILIKE $${paramIdx}`);
+      params.push(`%${location}%`);
+    }
+
+    const whereClause = filters.length > 0
+      ? `WHERE j.is_active = true AND ${filters.join(" AND ")}`
+      : `WHERE j.is_active = true`;
+
+    const version = await getListVersion(JOBS_LIST_VERSION_KEY);
+    const cacheKey = `jobs:active:v${version};page=${page};limit=${limit};title=${title ?? ""};location=${location ?? ""}`;
 
     try {
       const cached = await redisClient.get(cacheKey);
       if (cached) {
-        try {
-          const jobs = JSON.parse(cached);
-          return res.status(200).json({
-            success: true,
-            count: jobs.length,
-            fromCache: true,
-            jobs,
-          });
-        } catch {
-          console.warn("[Redis] Cache parse error, skipping cache");
-        }
+        const parsed = JSON.parse(cached);
+        return res.status(200).json({
+          success: true,
+          count: parsed.jobs.length,
+          total: parsed.total,
+          page,
+          totalPages: Math.ceil(parsed.total / limit),
+          jobs: parsed.jobs,
+          fromCache: true,
+        });
       }
     } catch (err) {
-      console.error("[Redis] Cache read error (non-fatal):", err);
+      console.warn("[Redis] Cache read error (non-fatal):", err);
     }
 
-    let querySting = `
-      SELECT
-        j.job_id,
-        j.title,
-        j.description,
-        j.salary,
-        j.location,
-        j.job_type,
-        j.role,
-        j.work_location,
-        j.openings,
-        j.created_at,
-        c.name AS company_name,
-        c.logo AS company_logo,
-        c.company_id AS company_id
+    const countQuery = sql.query(
+      `SELECT COUNT(*)::int AS total FROM jobs j ${whereClause}`,
+      params,
+    );
+    const dataQuery = sql.query(
+      `SELECT
+        j.job_id, j.title, j.description, j.salary, j.location,
+        j.job_type, j.role, j.work_location, j.openings, j.created_at,
+        c.name AS company_name, c.logo AS company_logo, c.company_id
       FROM jobs j
       JOIN companies c ON j.company_id = c.company_id
-      WHERE j.is_active = true
-    `;
+      ${whereClause}
+      ORDER BY j.created_at DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset],
+    );
 
-    const values: any[] = [];
-    let paramIndex = 1;
+    const [[countResult], jobs] = await Promise.all([countQuery, dataQuery]);
 
-    if (title) {
-      querySting += ` AND j.title ILIKE $${paramIndex}`;
-      values.push(`%${title}%`);
-      paramIndex++;
-    }
-
-    if (location) {
-      querySting += ` AND j.location ILIKE $${paramIndex}`;
-      values.push(`%${location}%`);
-    }
-
-    querySting += ` ORDER BY j.created_at DESC`;
-
-    const jobs = [...(await sql.query(querySting, values))];
+    const total = countResult?.total ?? 0;
 
     try {
-      await redisClient.setEx(cacheKey, 300, JSON.stringify(jobs));
+      await redisClient.setEx(
+        cacheKey,
+        60,
+        JSON.stringify({ jobs, total }),
+      );
     } catch (err) {
-      console.error("[Redis] Cache write error (non-fatal):", err);
+      console.warn("[Redis] Cache write error (non-fatal):", err);
     }
 
     return res.status(200).json({
       success: true,
       count: jobs.length,
-      fromCache: false,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
       jobs,
     });
   },

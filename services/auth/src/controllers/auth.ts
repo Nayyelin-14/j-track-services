@@ -51,7 +51,7 @@ export const register = TryCatch(async (req: Request, res: Response) => {
     throw new ErrorHandler(400, "Invalid role");
   }
 
-  const hashedPassword = await bcrypt.hash(password, 10);
+  const hashedPassword = await bcrypt.hash(password, 12);
 
   let registerUser;
   if (role === "recruiter") {
@@ -179,6 +179,16 @@ export const logout = TryCatch(async (req: AuthRequest, res: Response) => {
   });
 });
 
+const AUTH_USER_CACHE_PREFIX = "auth:user:";
+
+async function invalidateUserAuthCache(user_id: number) {
+  try {
+    await redisClient.del(`${AUTH_USER_CACHE_PREFIX}${user_id}`);
+  } catch (err) {
+    console.warn("[Redis] Cache invalidation error (non-fatal):", err);
+  }
+}
+
 export const getMe = TryCatch(async (req: AuthRequest, res: Response) => {
   const userData = req.user;
 
@@ -186,36 +196,45 @@ export const getMe = TryCatch(async (req: AuthRequest, res: Response) => {
     throw new ErrorHandler(401, "Unauthorized");
   }
 
-  const { data: user, fromCache } = await withCache(
-    redisClient,
-    `auth:user:${userData.user_id}`,
-    300,
-    async () => {
-      const [user] = await sql`
-        SELECT
-          user_id,
-          name,
-          email,
-          role,
-          phone_number,
-          bio,
-          resume,
-          profile_pic,
-          created_at
-        FROM users
-        WHERE user_id = ${userData.user_id}
-        LIMIT 1
-      `;
+  const cacheKey = `${AUTH_USER_CACHE_PREFIX}${userData.user_id}`;
 
-      if (!user) {
-        throw new ErrorHandler(404, "User not found");
-      }
+  try {
+    const cached = await redisClient.get(cacheKey);
+    if (cached) {
+      const user = JSON.parse(cached);
+      return res.json({ success: true, user, fromCache: true });
+    }
+  } catch (err) {
+    console.warn("[Redis] Cache read error (non-fatal):", err);
+  }
 
-      return user;
-    },
-  );
+  const [user] = await sql`
+    SELECT
+      user_id,
+      name,
+      email,
+      role,
+      phone_number,
+      bio,
+      resume,
+      profile_pic,
+      created_at
+    FROM users
+    WHERE user_id = ${userData.user_id}
+    LIMIT 1
+  `;
 
-  return res.json({ success: true, user, ...(fromCache && { fromCache }) });
+  if (!user) {
+    throw new ErrorHandler(404, "User not found");
+  }
+
+  try {
+    await redisClient.setEx(cacheKey, 300, JSON.stringify(user));
+  } catch (err) {
+    console.warn("[Redis] Cache write error (non-fatal):", err);
+  }
+
+  return res.json({ success: true, user });
 });
 
 export const RESET_TOKEN_PREFIX = "reset:";
@@ -389,6 +408,10 @@ export const changePassword = TryCatch(async (req: AuthRequest, res: Response) =
 
   res.clearCookie("accessToken");
   res.clearCookie("refreshToken");
+
+  if (user_id) {
+    await invalidateUserAuthCache(user_id);
+  }
 
   return res.status(200).json({
     success: true,

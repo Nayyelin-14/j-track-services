@@ -54,6 +54,11 @@ async function initDB() {
       created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `;
+  await sql`
+    ALTER TABLE companies
+    ALTER COLUMN logo DROP NOT NULL,
+    ALTER COLUMN logo_public_id DROP NOT NULL
+  `;
 
   await sql`
     CREATE TABLE IF NOT EXISTS jobs (
@@ -134,7 +139,7 @@ process.on("SIGTERM", gracefulShutdown);
 process.on("SIGINT", gracefulShutdown);
 
 async function startServer() {
-  const PORT = process.env.PORT || 7002;
+  const PORT = Number(process.env.PORT) || 7002;
 
   try {
     await connectRedis();
@@ -147,7 +152,7 @@ async function startServer() {
     analyticsConsumer = createAnalyticsConsumer();
     await analyticsConsumer.start();
 
-    app.listen(PORT, () => {
+    app.listen(PORT, "0.0.0.0", () => {
       console.log(`[Job Service] Running on port ${PORT}`);
     });
   } catch (err) {

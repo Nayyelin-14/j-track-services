@@ -12,6 +12,8 @@ import {
   invalidateCompaniesCache,
   sanitize,
   sanitizePositiveInt,
+  COMPANIES_LIST_VERSION_KEY,
+  getListVersion,
 } from "./utils.js";
 
 export const createCompany = TryCatch(
@@ -137,12 +139,7 @@ export const deleteCompany = TryCatch(
           `${process.env.UTILS_SERVICE_URL}/${encodeURIComponent(company.logo_public_id)}`,
         );
       } catch (err) {
-        console.error("Cloudinary delete failed:", err);
-        return res.status(404).json({
-          success: false,
-          message: "Company deleted successfully",
-          error: err,
-        });
+        console.error("Cloudinary delete failed (non-fatal):", err);
       }
     }
 
@@ -161,32 +158,62 @@ export const deleteCompany = TryCatch(
 );
 
 export const getAllCompanies = TryCatch(
-  async (_req: Request, res: Response) => {
-    const { data: companies, fromCache } = await withCache(
-      redisClient,
-      CACHE_KEYS.companies,
-      300,
-      async () => {
-        return await sql`
-          SELECT
-            company_id,
-            name,
-            description,
-            website,
-            location,
-            logo,
-            created_at
-          FROM companies
-          ORDER BY created_at DESC
-        `;
-      },
-    );
+  async (req: Request, res: Response) => {
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+    const offset = (page - 1) * limit;
+
+    const version = await getListVersion(COMPANIES_LIST_VERSION_KEY);
+    const cacheKey = `companies:list:v${version};page=${page};limit=${limit}`;
+
+    try {
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        return res.status(200).json({
+          success: true,
+          count: parsed.companies.length,
+          total: parsed.total,
+          page,
+          totalPages: Math.ceil(parsed.total / limit),
+          companies: parsed.companies,
+          fromCache: true,
+        });
+      }
+    } catch (err) {
+      console.warn("[Redis] Cache read error (non-fatal):", err);
+    }
+
+    const [companies, [countResult]] = await Promise.all([
+      sql`
+        SELECT
+          company_id, name, description, website, location, logo, created_at
+        FROM companies
+        ORDER BY created_at DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `,
+      sql`SELECT COUNT(*)::int AS total FROM companies`,
+    ]);
+
+    const total = countResult?.total ?? 0;
+
+    try {
+      await redisClient.setEx(
+        cacheKey,
+        300,
+        JSON.stringify({ companies, total }),
+      );
+    } catch (err) {
+      console.warn("[Redis] Cache write error (non-fatal):", err);
+    }
 
     return res.status(200).json({
       success: true,
       count: companies.length,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
       companies,
-      ...(fromCache && { fromCache }),
     });
   },
 );

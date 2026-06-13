@@ -7,6 +7,7 @@ const mockBcryptHash = vi.fn((p: string) => Promise.resolve(`hashed_${p}`));
 const mockSql = vi.fn();
 const mockRedisGet = vi.fn();
 const mockRedisSet = vi.fn();
+const mockRedisSetEx = vi.fn();
 const mockRedisDel = vi.fn();
 const mockKafkaPublish = vi.fn();
 const mockSignAccess = vi.fn(() => "access-token");
@@ -67,7 +68,7 @@ vi.mock("@jtrack/shared/redis/helpers", () => ({
   withCache: mockWithCache,
 }));
 vi.mock("../../redis", () => ({
-  redisClient: { get: mockRedisGet, set: mockRedisSet, del: mockRedisDel },
+  redisClient: { get: mockRedisGet, set: mockRedisSet, setEx: mockRedisSetEx, del: mockRedisDel },
 }));
 vi.mock("../../kafka", () => ({ kafka: { publish: mockKafkaPublish } }));
 vi.mock("../../template", () => ({

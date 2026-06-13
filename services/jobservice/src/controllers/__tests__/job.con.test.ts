@@ -7,6 +7,7 @@ const mockRedisGet = vi.fn();
 const mockRedisDel = vi.fn();
 const mockRedisKeys = vi.fn();
 const mockRedisSetEx = vi.fn();
+const mockRedisIncr = vi.fn(() => Promise.resolve(1));
 const mockKafkaPublish = vi.fn(() => Promise.resolve());
 const mockGetBuffer = vi.fn((f: any) => ({ content: f?.buffer ?? "datauri" }));
 
@@ -27,6 +28,7 @@ vi.mock("../../redis", () => ({
     del: mockRedisDel,
     keys: mockRedisKeys,
     setEx: mockRedisSetEx,
+    incr: mockRedisIncr,
   },
 }));
 vi.mock("../../kafka", () => ({ kafka: { publish: mockKafkaPublish } }));
@@ -104,12 +106,26 @@ describe("getAllCompanies", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
-  it("returns companies list", async () => {
-    mockSql.mockResolvedValueOnce([{ company_id: 1, name: "Acme" }]);
+  it("returns from cache when available", async () => {
+    mockRedisGet.mockResolvedValueOnce("1");
+    mockRedisGet.mockResolvedValueOnce(
+      JSON.stringify({ companies: [{ company_id: 1, name: "Acme" }], total: 1 }),
+    );
     const res = mockRes();
     await MODULES.getAllCompanies(mockReq(), res);
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: true, count: 1 }),
+      expect.objectContaining({ success: true, count: 1, total: 1, page: 1, totalPages: 1, fromCache: true }),
+    );
+  });
+  it("fetches from db on cache miss", async () => {
+    mockRedisGet.mockResolvedValueOnce("1");
+    mockRedisGet.mockResolvedValueOnce(null);
+    mockSql.mockResolvedValueOnce([{ company_id: 1, name: "Acme" }]);
+    mockSql.mockResolvedValueOnce([{ total: 1 }]);
+    const res = mockRes();
+    await MODULES.getAllCompanies(mockReq(), res);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, count: 1, total: 1, page: 1, totalPages: 1 }),
     );
   });
 });
@@ -250,21 +266,26 @@ describe("getAllActiveJobs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
-  it("returns cached jobs", async () => {
-    mockRedisGet.mockResolvedValueOnce(JSON.stringify([{ job_id: 1 }]));
+  it("returns from cache when available", async () => {
+    mockRedisGet.mockResolvedValueOnce("1");
+    mockRedisGet.mockResolvedValueOnce(
+      JSON.stringify({ jobs: [{ job_id: 1, title: "Engineer" }], total: 1 }),
+    );
     const res = mockRes();
     await MODULES.getAllActiveJobs(mockReq({ query: {} }), res);
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ fromCache: true }),
+      expect.objectContaining({ success: true, count: 1, total: 1, page: 1, totalPages: 1, fromCache: true }),
     );
   });
-  it("fetches and caches jobs from db", async () => {
+  it("fetches from db on cache miss", async () => {
+    mockRedisGet.mockResolvedValueOnce("1");
     mockRedisGet.mockResolvedValueOnce(null);
-    mockSqlQuery.mockResolvedValueOnce([[{ job_id: 1 }]]);
+    mockSqlQuery.mockResolvedValueOnce([{ total: 1 }]);
+    mockSqlQuery.mockResolvedValueOnce([{ job_id: 1, title: "Engineer" }]);
     const res = mockRes();
     await MODULES.getAllActiveJobs(mockReq({ query: {} }), res);
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ fromCache: false }),
+      expect.objectContaining({ success: true, count: 1, total: 1, page: 1, totalPages: 1 }),
     );
   });
 });

@@ -17,6 +17,7 @@ RUN pnpm build:shared && pnpm --filter jobservice build
 RUN CI=true pnpm prune --prod
 
 FROM node:20-alpine AS runner
+RUN apk add --no-cache wget
 WORKDIR /app
 
 COPY --from=build /app/node_modules ./node_modules

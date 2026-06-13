@@ -21,12 +21,12 @@ async function connectRedis() {
 }
 
 async function startServer() {
-  const PORT = process.env.PORT || 7001;
+  const PORT = Number(process.env.PORT) || 7001;
 
   try {
     await connectRedis();
 
-    app.listen(PORT, () => {
+    app.listen(PORT, "0.0.0.0", () => {
       console.log(`[User Service] Running on port ${PORT}`);
     });
   } catch (err) {

@@ -8,23 +8,20 @@ import { createMailConsumer } from "./consumer.js";
 import { createNotificationConsumer } from "./notification-consumer.js";
 import { ensureTopic } from "@jtrack/shared/kafka/topic";
 
-function getEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing environment variable: ${name}`);
+function initCloudinary() {
+  const CLOUD_NAME = process.env["CLOUD_NAME"];
+  const CLOUD_API_KEY = process.env["CLOUD_API_KEY"];
+  const CLOUD_API_SECRET = process.env["CLOUD_API_SECRET"];
+  if (!CLOUD_NAME || !CLOUD_API_KEY || !CLOUD_API_SECRET) {
+    console.warn("[Cloudinary] Missing credentials — upload routes will fail");
+    return;
   }
-  return value;
+  cloudinary.config({
+    cloud_name: CLOUD_NAME,
+    api_key: CLOUD_API_KEY,
+    api_secret: CLOUD_API_SECRET,
+  });
 }
-
-const CLOUD_NAME = getEnv("CLOUD_NAME");
-const CLOUD_API_KEY = getEnv("CLOUD_API_KEY");
-const CLOUD_API_SECRET = getEnv("CLOUD_API_SECRET");
-
-cloudinary.config({
-  cloud_name: CLOUD_NAME,
-  api_key: CLOUD_API_KEY,
-  api_secret: CLOUD_API_SECRET,
-});
 
 const mailConsumer = createMailConsumer();
 export { mailConsumer };
@@ -68,9 +65,10 @@ process.on("SIGTERM", gracefulShutdown);
 process.on("SIGINT", gracefulShutdown);
 
 async function startServer() {
-  const PORT = process.env.PORT || 6001;
+  const PORT = Number(process.env.PORT) || 6001;
 
   try {
+    initCloudinary();
     await ensureTopic("send-mail");
     await ensureTopic("send-mail-dlq");
     await ensureTopic("job-events");
@@ -80,7 +78,7 @@ async function startServer() {
     await notificationConsumer.start();
     console.log("[Notification Consumer] Started");
 
-    app.listen(PORT, () => {
+    app.listen(PORT, "0.0.0.0", () => {
       console.log(`[Utils Service] Running on port ${PORT}`);
     });
   } catch (err) {
