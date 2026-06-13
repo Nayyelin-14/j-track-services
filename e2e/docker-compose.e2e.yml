@@ -7,17 +7,17 @@ services:
       context: .
       dockerfile: e2e/Dockerfile
     environment:
-      E2E_BASE_URL: http://nginx-dev:80
+      E2E_BASE_URL: http://nginx:80
     depends_on:
-      auth-dev:
+      auth:
         condition: service_started
-      user-dev:
+      user:
         condition: service_started
-      jobservice-dev:
+      jobservice:
         condition: service_started
-      utils-dev:
+      utils:
         condition: service_started
-      nginx-dev:
+      nginx:
         condition: service_started
     volumes:
       - ./e2e:/app/e2e
