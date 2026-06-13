@@ -6,7 +6,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "build:shared": "pnpm --filter @jtrack/shared build",
-    "dev": "pnpm -r --parallel dev",
+    "dev": "pnpm build:shared && pnpm -r --parallel --filter './services/*' dev",
     "dev:auth": "pnpm --filter auth dev",
     "dev:job": "pnpm --filter jobservice dev",
     "dev:user": "pnpm --filter user dev",

@@ -22,20 +22,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DB_URL: postgresql://jtrack:jtrack123@localhost:5432/jtrack
+  DB_URL: postgresql://jtrack:${{ secrets.DB_PASSWORD }}@localhost:5432/jtrack
   REDIS_URL: redis://localhost:6379
   KAFKA_BROKER: localhost:9092
   UTILS_SERVICE_URL: http://localhost:6001/api/utils
   FRONTEND_URL: http://localhost:3000
-  JWT_ACCESS_SECRET: e2e-access-secret-not-for-production
-  JWT_REFRESH_SECRET: e2e-refresh-secret-not-for-production
-  JWT_RESET_SECRET: e2e-reset-secret-not-for-production
-  CLOUD_NAME: dummy
-  CLOUD_API_KEY: dummy
-  CLOUD_API_SECRET: dummy
-  API_KEY_GROQ: dummy
-  API_KEY_GEMINI: dummy
-  NODE_ENV: ci
+  JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+  JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+  JWT_RESET_SECRET: ${{ secrets.JWT_RESET_SECRET }}
 
 jobs:
   e2e:
@@ -48,7 +42,7 @@ jobs:
         env:
           POSTGRES_DB: jtrack
           POSTGRES_USER: jtrack
-          POSTGRES_PASSWORD: jtrack123
+          POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
         ports:
           - 5432:5432
         options: >-
@@ -82,22 +76,7 @@ jobs:
           --health-interval 10s --health-timeout 10s --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Build shared library
-        run: pnpm --filter @jtrack/shared build
-
+      - uses: ./.github/actions/setup
       - name: Build all services
         run: pnpm -r --filter auth --filter user --filter jobservice --filter utils build
 
