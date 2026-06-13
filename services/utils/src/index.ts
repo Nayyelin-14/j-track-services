@@ -69,6 +69,11 @@ async function startServer() {
 
   try {
     initCloudinary();
+
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[Utils Service] Running on port ${PORT}`);
+    });
+
     await ensureTopic("send-mail");
     await ensureTopic("send-mail-dlq");
     await ensureTopic("job-events");
@@ -77,10 +82,6 @@ async function startServer() {
 
     await notificationConsumer.start();
     console.log("[Notification Consumer] Started");
-
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`[Utils Service] Running on port ${PORT}`);
-    });
   } catch (err) {
     console.error("[Utils Service] Failed to start:", err);
     process.exit(1);
