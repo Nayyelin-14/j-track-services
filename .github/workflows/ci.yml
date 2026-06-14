@@ -405,7 +405,7 @@ jobs:
           failed=""
           check() {
             local name="$1" result="$2"
-            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
               echo "::error::$name: $result"
               failed="$failed $name"
             fi
