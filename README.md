@@ -47,7 +47,7 @@ A pnpm monorepo powering a job marketplace with JWT-authenticated REST APIs, AI-
         │         └──────────┬───────────┘
         │                    │
         │         ┌──────────▼──────────┐
-        ├────────►│   PostgreSQL (Neon)  │
+        ├────────►│   PostgreSQL         │
         │         │  + job_analytics     │
         │         └─────────────────────┘
        │
@@ -95,7 +95,6 @@ For server-side calls, use the Docker service name (`http://auth:7000`, `http://
 
 **Client Components:**
 ```ts
-// Standard fetch (cookies sent automatically for same-origin)
 const res = await fetch("/api/auth/login", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -116,26 +115,13 @@ export async function POST(req: Request) {
   return new Response(await res.text(), { status: res.status });
 }
 ```
-You can proxy through Next.js API routes to forward cookies from the browser to backend services.
 
 ### Cookie-Based Auth Flow
 
 1. User logs in via `POST /api/auth/login` — backend sets `accessToken` (15min) and `refreshToken` (7d) as httpOnly cookies
 2. Subsequent requests include these cookies automatically
 3. When the access token expires, the `isAuthenticated` middleware automatically refreshes it using the refresh token and sets a new access token cookie
-4. Next.js Middleware can check for the presence of cookies to protect routes:
-
-```ts
-// middleware.ts
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
-
-export function middleware(req: NextRequest) {
-  const token = req.cookies.get("accessToken");
-  if (!token) return NextResponse.redirect(new URL("/login", req.url));
-  return NextResponse.next();
-}
-```
+4. Next.js Middleware can check for the presence of cookies to protect routes
 
 ### CORS
 
@@ -154,15 +140,17 @@ Adjust the `FRONTEND_URL` environment variable for production deployments.
 | **Runtime** | Node.js ≥20 |
 | **Language** | TypeScript 6 |
 | **Framework** | Express 5 |
-| **Database** | PostgreSQL via Neon (`@neondatabase/serverless`) |
-| **Cache** | Redis 5 |
+| **Database** | PostgreSQL |
+| **Cache** | Redis 7 |
 | **Message Broker** | Apache Kafka (via `kafkajs`) |
-| **AI** | Groq (`llama-3.3-70b-versatile`), Google Gemini (`gemini-2.0-flash-lite`) |
+| **AI** | Groq, Google Gemini |
 | **Media** | Cloudinary |
 | **Auth** | JWT (`jsonwebtoken`), bcrypt |
 | **Validation** | Zod 4 |
 | **Email** | Nodemailer (SMTP) |
 | **Testing** | Vitest 4 |
+| **CI/CD** | GitHub Actions |
+| **Container Registry** | GitHub Container Registry (GHCR) |
 | **Monorepo** | pnpm workspaces |
 
 ---
@@ -183,8 +171,6 @@ Authentication gateway — registration, login, password management.
 | `/api/auth/reset-password/:token` | POST | No | Reset password with token |
 | `/api/auth/change-password` | PATCH | Yes | Change password (requires current password) |
 | `/health` | GET | No | Health check (DB, Redis, Kafka) |
-
-**Owns tables:** `users`, `skills`, `user_skills`
 
 ### User Service (`:7001`)
 
@@ -227,8 +213,6 @@ Companies, jobs, applications, and match analysis.
 | `/api/jobs/analytics/:job_id` | GET | Yes | Recruiter dashboard: daily views, applications, status changes |
 | `/health` | GET | No | Health check (DB, Redis, Kafka) |
 
-**Owns tables:** `companies`, `jobs`, `applications`, `job_analytics`
-
 ### Utils Service (`:6001`)
 
 AI-powered utilities, file storage, email delivery.
@@ -248,13 +232,99 @@ AI-powered utilities, file storage, email delivery.
 
 ---
 
+## CI/CD Pipeline
+
+The project uses GitHub Actions for continuous integration. The pipeline runs **only on pull requests** — no separate build on merge.
+
+### Pipeline jobs
+
+| Job | Trigger | Description |
+|-----|---------|-------------|
+| `infra-check` | Always | Validates docker-compose and nginx config syntax |
+| `changes` | Always | Detects which files changed using `dorny/paths-filter` |
+| `audit` | Always | Runs `pnpm audit --audit-level=high` |
+| `build` | Services changed | Builds, lints, type-checks, and tests each changed service |
+| `smoke-e2e` | E2E or services changed | Spins up all services and runs one critical cross-service flow |
+| `docker-build` | Services changed | Builds Docker images with layer caching, smoke tests containers, scans with Trivy |
+| `ci-passed` | Always | Gate — exits non-zero if any upstream job failed |
+
+### Path-based filtering
+
+Only services with file changes are built and dockerized. The `changes` job computes a dynamic matrix:
+
+| Changed path | Services built |
+|---|---|
+| `services/auth/**` | auth |
+| `services/user/**` | user |
+| `services/jobservice/**` | jobservice |
+| `services/utils/**` | utils |
+| `packages/shared/**` | all 4 |
+| `e2e/**` | none (triggers smoke-e2e only) |
+| `.github/workflows/**`, config files | none |
+
+### Docker build
+
+Each service builds a Docker image using `docker/build-push-action` with:
+- **Layer caching** via GHCR (`type=registry`) — dependency install layers are reused across runs, reducing build time from ~3min to ~20s
+- **Builder driver** — `docker-container` (via `setup-buildx-action`) enables registry cache export
+- **Lowercase registry** — repository name is lowercased to satisfy Docker tag requirements
+
+### Image tagging
+
+- **PR builds** — images are pushed to GHCR tagged with the commit SHA (e.g., `ghcr.io/org/repo/auth:abc123`)
+- **On merge** — a separate `retag.yml` workflow copies the SHA tag to `latest` using `docker buildx imagetools create` (manifest copy, no rebuild)
+
+### Trivy vulnerability scanning
+
+Every Docker image is scanned with [Trivy](https://github.com/aquasecurity/trivy-action) at `CRITICAL` and `HIGH` severity levels. Non-zero findings are reported but do not block CI.
+
+### E2E testing
+
+| Test suite | When | Coverage |
+|---|---|---|
+| **Smoke** (`smoke-e2e`) | Every PR with code changes | Single critical flow: register → cross-service JWT → create company → create job → apply → verify. Runs in ~5-7min. |
+| **Full suite** (`e2e-full.yml`) | Weekly (Sunday 2AM) + manual dispatch | All 500+ tests across auth, user, jobs modules. Runs in ~20min. |
+
+The smoke test covers the most common failure modes: broken cross-service JWT, Kafka message loss, DB schema drift, and role/permission enforcement.
+
+---
+
+## Container Registry
+
+Docker images are hosted on **GitHub Container Registry (GHCR)**:
+
+```
+ghcr.io/<owner>/j-track-services/<service>:<sha>
+```
+
+Cache manifests are stored alongside images using the `:cache` tag suffix:
+
+```
+ghcr.io/<owner>/j-track-services/<service>:cache
+```
+
+---
+
+## Dependabot
+
+Dependencies are managed automatically via Dependabot:
+
+| Ecosystem | Schedule | Groups |
+|-----------|----------|--------|
+| npm | Weekly (Sunday) | `patches`, `minor` |
+| GitHub Actions | Weekly (Sunday) | — |
+
+Patches and minor updates are grouped into single PRs to reduce noise. Pull requests trigger the full CI pipeline automatically.
+
+---
+
 ## Getting Started
 
 ### Prerequisites
 
 - Node.js ≥20
 - pnpm ≥9
-- PostgreSQL database (Neon)
+- PostgreSQL database
 - Redis instance
 - Apache Kafka broker
 - API keys for Groq, Gemini, Cloudinary
@@ -262,7 +332,7 @@ AI-powered utilities, file storage, email delivery.
 
 ### Environment Variables
 
-Create a `.env` file at the project root (or per-service `.env` files) based on `.env.example`:
+Create a `.env` file at the project root based on `.env.example`:
 
 | Variable | Required | Services | Default |
 |----------|----------|----------|---------|
@@ -380,24 +450,28 @@ Reusable modules consumed by all services via `"@jtrack/shared": "workspace:*"`:
 
 - **HTTP-only cookies for JWT** — access and refresh tokens stored in secure, httpOnly, sameSite cookies. Prevents XSS token exfiltration. Access token auto-refreshes via `isAuthenticated` middleware when expired but refresh token is valid.
 - **SSE for AI responses** — career guidance, match analysis, and resume scoring stream tokens in real-time via Server-Sent Events rather than blocking on long-running AI inference.
-- **Kafka for event-driven analytics** — job views, applications, and status changes are published as structured events to the `job-events` topic. Two independent consumer groups process the same stream: the analytics consumer (job service) aggregates daily counts into `job_analytics`, and the notification consumer (utils service) sends real-time recruiter alerts. This demonstrates the Kafka pattern of one event → multiple reactions.
+- **Kafka for event-driven analytics** — job views, applications, and status changes are published as structured events to the `job-events` topic. Two independent consumer groups process the same stream: the analytics consumer (job service) aggregates daily counts into `job_analytics`, and the notification consumer (utils service) sends real-time recruiter alerts.
 - **Internal service HTTP calls** — auth, user, and job services call the utils service directly for file uploads and AI analysis. The utils service does not expose auth middleware externally, relying on network-level isolation. Endpoints are rate-limited instead.
 - **pnpm workspaces** — strict dependency isolation with the `.pnpm` virtual store. Dependencies are deduplicated and hoisted only as configured via `.npmrc`.
 - **Redis caching** — user profiles cached for 5 minutes; active jobs and job details cached with TTL. Cache invalidation on writes.
+- **Single CI pipeline** — everything runs on PR only (including docker build and push). No redundant pipeline on merge. Critical e2e smoke test on every PR prevents merge of broken cross-service flows.
 
 ---
 
 ## Testing
 
 ```bash
-# Run all tests
+# Run all unit tests
 pnpm test
 
-# Utils service tests only
-cd services/utils && pnpm test
+# Run e2e smoke test (single critical flow)
+pnpm test:e2e
+
+# Run full e2e suite
+pnpm test:e2e:watch
 ```
 
-Tests use **Vitest** with v8 coverage. Currently covers the match analysis pipeline (Zod validation, PDF parsing, AI streaming, error handling, client disconnect).
+Tests use **Vitest** with v8 coverage. Unit tests cover controllers, validators, and service logic with mocked dependencies. E2E tests spin up all 4 services against real PostgreSQL, Redis, and Kafka instances.
 
 ---
 
@@ -405,29 +479,56 @@ Tests use **Vitest** with v8 coverage. Currently covers the match analysis pipel
 
 ```
 j-track-services/
-├── .npmrc                        # pnpm: shamefully-hoist, peer deps
-├── pnpm-workspace.yaml           # workspace: packages/*, services/*
-├── package.json                  # workspace scripts
-├── docker-compose.yml            # All services + infra containers
+├── .github/
+│   ├── actions/setup/          # Composite action: checkout + deps + build + DB init
+│   ├── workflows/
+│   │   ├── ci.yml              # Main PR pipeline
+│   │   ├── e2e-full.yml        # Full e2e suite (weekly + manual)
+│   │   └── retag.yml           # Retag SHA → latest on merge
+│   └── dependabot.yml
+├── e2e/                         # End-to-end tests
+│   ├── src/
+│   │   ├── smoke.test.ts        # Single critical cross-service flow
+│   │   ├── auth.test.ts
+│   │   ├── user.test.ts
+│   │   ├── jobs.test.ts
+│   │   ├── client.ts            # HTTP client with cookie support
+│   │   ├── config.ts            # Service URLs and endpoints
+│   │   ├── fixtures.ts          # Test data generators
+│   │   └── helpers.ts           # Auth helpers (register, login)
+│   ├── vitest.config.ts
+│   └── package.json
+├── nginx/                       # Reverse proxy config
+│   ├── Dockerfile
+│   ├── Dockerfile.prod
+│   ├── nginx.conf
+│   ├── prod/conf.d/
+│   └── ssl/
 ├── packages/
-│   └── shared/                   # @jtrack/shared
+│   └── shared/                  # @jtrack/shared
 │       ├── src/
 │       │   ├── index.ts
-│       │   ├── db.ts             # Neon PostgreSQL client
-│       │   ├── token.ts          # JWT sign/verify
-│       │   ├── cookies.ts        # Cookie options
-│       │   ├── buffer.ts         # File → data URI
-│       │   ├── errorHandler.ts   # Error handling middleware
-│       │   ├── tryCatch.ts       # Async wrapper
-│       │   ├── isauthenticated.ts# JWT middleware
-│       │   ├── redis/helpers.ts  # Redis helpers
-│       │   └── kafka/            # Kafka producer, topics, types
+│       │   ├── db.ts
+│       │   ├── token.ts
+│       │   ├── cookies.ts
+│       │   ├── buffer.ts
+│       │   ├── errorHandler.ts
+│       │   ├── tryCatch.ts
+│       │   ├── isauthenticated.ts
+│       │   ├── redis/helpers.ts
+│       │   └── kafka/
 │       └── tsconfig.json
-└── services/
-    ├── auth/                     # Authentication service
-    ├── user/                     # Profile & skills service
-    ├── jobservice/               # Jobs, companies, applications
-    └── utils/                    # AI, uploads, email consumer
+├── services/
+│   ├── auth/                    # Authentication service
+│   ├── user/                    # Profile & skills service
+│   ├── jobservice/              # Jobs, companies, applications
+│   └── utils/                   # AI, uploads, email consumer
+├── docker-compose.yml
+├── docker-compose.dev.yml
+├── docker-compose.prod.yml
+├── eslint.config.js
+├── pnpm-workspace.yaml
+└── package.json
 ```
 
 ---
