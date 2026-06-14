@@ -333,19 +333,22 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+      - name: Lowercase registry
+        id: reg
+        run: echo "base=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - name: Build image with layer cache
         uses: docker/build-push-action@v6
         with:
           context: .
           file: services/${{ matrix.service }}/Dockerfile
-          tags: ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
+          tags: ${{ steps.reg.outputs.base }}/${{ matrix.service }}:${{ github.sha }}
           load: true
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}/${{ matrix.service }}:cache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}/${{ matrix.service }}:cache,mode=max
+          cache-from: type=registry,ref=${{ steps.reg.outputs.base }}/${{ matrix.service }}:cache
+          cache-to: type=registry,ref=${{ steps.reg.outputs.base }}/${{ matrix.service }}:cache,mode=max
 
       - name: Smoke test
         run: |
-          IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}"
+          IMAGE="${{ steps.reg.outputs.base }}/${{ matrix.service }}:${{ github.sha }}"
           echo "Starting container..."
           CID=$(docker run -d --network host \
             -e DB_URL="$DB_URL" \
@@ -383,13 +386,13 @@ jobs:
       - name: Scan with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
+          image-ref: ${{ steps.reg.outputs.base }}/${{ matrix.service }}:${{ github.sha }}
           exit-code: 0
           severity: CRITICAL,HIGH
 
       - name: Push to registry
         run: |
-          IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.service }}"
+          IMAGE="${{ steps.reg.outputs.base }}/${{ matrix.service }}"
           docker push "$IMAGE:${{ github.sha }}"
 
   ci-passed:
