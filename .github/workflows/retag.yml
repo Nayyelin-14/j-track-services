@@ -1,0 +1,52 @@
+name: Retag latest
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: retag-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [auth, user, jobservice, utils]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get PR head SHA
+        id: sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_HEAD=$(gh api "/repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+            --jq '.[0].head.sha' 2>/dev/null || echo "${{ github.sha }}")
+          echo "pr_sha=$PR_HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Retag as latest
+        run: |
+          SRC="ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ steps.sha.outputs.pr_sha }}"
+          DST="ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest"
+          if docker buildx imagetools inspect "$SRC" > /dev/null 2>&1; then
+            echo "Retagging $SRC → $DST"
+            docker buildx imagetools create "$SRC" "$DST"
+          else
+            echo "Source $SRC not found in registry — skipping (direct push without PR?)"
+          fi

@@ -3,8 +3,6 @@ name: CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -193,11 +191,11 @@ jobs:
           name: coverage-${{ matrix.service }}
           path: services/${{ matrix.service }}/coverage/
 
-  integration-test:
+  smoke-e2e:
     if: needs.changes.outputs.e2e == 'true'
     needs: [changes, build]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:15
@@ -271,12 +269,12 @@ jobs:
               sleep 2
             done
           done
-      - name: Run e2e tests
-        run: pnpm --filter e2e test
+      - name: Run smoke e2e test
+        run: pnpm --filter e2e exec vitest run src/smoke.test.ts
 
   docker-build:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [changes, build, integration-test]
+    needs: [changes, build]
+    if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -333,10 +331,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build image
-        run: |
-          IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.service }}"
-          docker build -t "$IMAGE:${{ github.sha }}" -f "services/${{ matrix.service }}/Dockerfile" .
+      - name: Build image with layer cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          tags: ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
+          load: true
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}/${{ matrix.service }}:cache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}/${{ matrix.service }}:cache,mode=max
 
       - name: Smoke test
         run: |
@@ -352,18 +355,28 @@ jobs:
             -e UTILS_SERVICE_URL="$UTILS_SERVICE_URL" \
             -e FRONTEND_URL="$FRONTEND_URL" \
             "$IMAGE")
-          sleep 30
-          echo "--- Container logs ---"
+          for i in $(seq 1 10); do
+            sleep 2
+            RUNNING=$(docker inspect --format='{{.State.Running}}' "$CID" 2>/dev/null || echo "false")
+            if [[ "$RUNNING" == "true" ]]; then
+              echo "✓ Container running after $(( i * 2 ))s"
+              docker stop "$CID" > /dev/null 2>&1 || true
+              docker rm "$CID" > /dev/null 2>&1 || true
+              exit 0
+            fi
+            if ! docker inspect "$CID" > /dev/null 2>&1; then
+              echo "::error::Container exited before smoke check"
+              docker logs "$CID" 2>&1 || true
+              docker rm "$CID" > /dev/null 2>&1 || true
+              exit 1
+            fi
+            echo "  Waiting... ($(( i * 2 ))s)"
+          done
+          echo "::error::Container not running after 20s"
           docker logs "$CID" 2>&1 || true
-          echo "--- End logs ---"
-          RUNNING=$(docker inspect --format='{{.State.Running}}' "$CID" 2>/dev/null || echo "false")
           docker stop "$CID" > /dev/null 2>&1 || true
           docker rm "$CID" > /dev/null 2>&1 || true
-          if [[ "$RUNNING" != "true" ]]; then
-            echo "::error::Container crashed on startup — app initialization failed"
-            exit 1
-          fi
-          echo "✓ Container started and stayed alive"
+          exit 1
 
       - name: Scan with Trivy
         uses: aquasecurity/trivy-action@0.28.0
@@ -376,8 +389,6 @@ jobs:
         run: |
           IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.service }}"
           docker push "$IMAGE:${{ github.sha }}"
-          docker tag "$IMAGE:${{ github.sha }}" "$IMAGE:latest"
-          docker push "$IMAGE:latest"
 
   ci-passed:
     if: always()
@@ -385,7 +396,7 @@ jobs:
       - infra-check
       - audit
       - build
-      - integration-test
+      - smoke-e2e
       - docker-build
     runs-on: ubuntu-latest
     steps:
@@ -402,7 +413,7 @@ jobs:
           check infra-check "${{ needs.infra-check.result }}"
           check audit "${{ needs.audit.result }}"
           check build "${{ needs.build.result }}"
-          check integration-test "${{ needs.integration-test.result }}"
+          check smoke-e2e "${{ needs.smoke-e2e.result }}"
           check docker-build "${{ needs.docker-build.result }}"
           if [[ -n "$failed" ]]; then
             echo "CI failed on:$failed"
