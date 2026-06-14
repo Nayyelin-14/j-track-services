@@ -142,7 +142,7 @@ jobs:
 
   build:
     needs: changes
-    if: needs.changes.outputs.any == 'true'
+    if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
