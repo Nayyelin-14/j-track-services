@@ -60,7 +60,7 @@ export const getMe = TryCatch(async (req: AuthRequest, res: Response) => {
         profile_pic: user.profile_pic,
         created_at: user.created_at,
         subscription: user.subscription,
-        skills: user.user_skills.map((us) => us.skill),
+        skills: user.user_skills.map((us: { skill: unknown }) => us.skill),
       };
     },
   );

@@ -150,7 +150,7 @@ export const getApplications = TryCatch(
           throw new ErrorHandler(404, "No applications found");
         }
 
-        return applications.map((a) => ({
+        return applications.map((a: { application_id: number; status: string; applied_at: Date; subscribed: boolean | null; job: { job_id: number; title: string; salary: unknown; location: string | null; job_type: unknown; work_location: unknown; is_active: boolean | null; company: { company_id: number; name: string; logo: string | null } } }) => ({
           application_id: a.application_id,
           status: a.status,
           applied_at: a.applied_at,
@@ -227,7 +227,7 @@ export const getApplicationsByRecruiterJob = TryCatch(
           throw new ErrorHandler(404, "Job not found or access denied");
         }
 
-        const userIds = applications.map((a) => a.applicant_id);
+        const userIds = applications.map((a: { applicant_id: number }) => a.applicant_id);
         const users = await prisma.user.findMany({
           where: { user_id: { in: userIds } },
           select: {
@@ -239,9 +239,10 @@ export const getApplicationsByRecruiterJob = TryCatch(
             profile_pic: true,
           },
         });
-        const userMap = new Map(users.map((u) => [u.user_id, u]));
+        const usersTyped = users as Array<{ user_id: number; name: string | null; email: string | null; phone_number: string | null; bio: string | null; profile_pic: string | null }>;
+        const userMap = new Map(usersTyped.map((u: { user_id: number; name: string | null; email: string | null; phone_number: string | null; bio: string | null; profile_pic: string | null }) => [u.user_id, u]));
 
-        return applications.map((a) => {
+        return applications.map((a: { application_id: number; status: string; applied_at: Date; subscribed: boolean | null; resume: string | null; applicant_id: number; job: { job_id: number; title: string } }) => {
           const u = userMap.get(a.applicant_id);
           return {
             application_id: a.application_id,

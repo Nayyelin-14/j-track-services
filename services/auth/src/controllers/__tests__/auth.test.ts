@@ -4,7 +4,13 @@ import axios from "axios";
 
 const mockBcryptCompare = vi.fn();
 const mockBcryptHash = vi.fn((p: string) => Promise.resolve(`hashed_${p}`));
-const mockSql = vi.fn();
+const mockUserFindFirst = vi.fn();
+const mockUserCreate = vi.fn();
+const mockUserUpdate = vi.fn();
+const mockPrisma = {
+  user: { findFirst: mockUserFindFirst, create: mockUserCreate, update: mockUserUpdate },
+  $queryRaw: vi.fn(),
+};
 const mockRedisGet = vi.fn();
 const mockRedisSet = vi.fn();
 const mockRedisSetEx = vi.fn();
@@ -33,7 +39,7 @@ vi.mock("bcrypt", () => ({
   hash: mockBcryptHash,
   genSalt: vi.fn(),
 }));
-vi.mock("@jtrack/shared/db", () => ({ sql: mockSql }));
+vi.mock("@jtrack/shared/db", () => ({ prisma: mockPrisma }));
 vi.mock("@jtrack/shared/token", () => ({
   signAccessToken: mockSignAccess,
   signRefreshToken: mockSignRefresh,
@@ -111,22 +117,22 @@ describe("register", () => {
   });
 
   it("throws 400 if email already exists", async () => {
-    mockSql.mockResolvedValueOnce([{ email: "a@b.com" }]);
+    mockUserFindFirst.mockResolvedValueOnce({ email: "a@b.com" });
     const res = mockRes();
     await MODULES.register(mockReq({ body: { name: "A", email: "a@b.com", password: "123456", phone_number: "123", role: "recruiter" } }), res);
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
   it("throws 400 for invalid role", async () => {
-    mockSql.mockResolvedValueOnce([]);
+    mockUserFindFirst.mockResolvedValueOnce(null);
     const res = mockRes();
     await MODULES.register(mockReq({ body: { name: "A", email: "a@b.com", password: "123456", phone_number: "123", role: "admin" } }), res);
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
   it("registers a recruiter successfully", async () => {
-    mockSql.mockResolvedValueOnce([]);
-    mockSql.mockResolvedValueOnce([{ user_id: 1, name: "A", email: "a@b.com", phone_number: "123", role: "recruiter", created_at: new Date() }]);
+    mockUserFindFirst.mockResolvedValueOnce(null);
+    mockUserCreate.mockResolvedValueOnce({ user_id: 1, name: "A", email: "a@b.com", phone_number: "123", role: "recruiter", created_at: new Date() });
     const res = mockRes();
     await MODULES.register(mockReq({ body: { name: "A", email: "a@b.com", password: "123456", phone_number: "123", role: "recruiter" } }), res);
     expect(res.status).toHaveBeenCalledWith(201);
@@ -144,14 +150,14 @@ describe("login", () => {
   });
 
   it("throws 401 for wrong email", async () => {
-    mockSql.mockResolvedValueOnce([]);
+    mockUserFindFirst.mockResolvedValueOnce(null);
     const res = mockRes();
     await MODULES.login(mockReq({ body: { email: "a@b.com", password: "x" } }), res);
     expect(res.status).toHaveBeenCalledWith(401);
   });
 
   it("throws 401 for wrong password", async () => {
-    mockSql.mockResolvedValueOnce([{ user_id: 1, name: "A", email: "a@b.com", password: "hashed", role: "recruiter" }]);
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, name: "A", email: "a@b.com", password: "hashed", role: "recruiter" });
     mockBcryptCompare.mockResolvedValueOnce(false);
     const res = mockRes();
     await MODULES.login(mockReq({ body: { email: "a@b.com", password: "wrong" } }), res);
@@ -159,9 +165,9 @@ describe("login", () => {
   });
 
   it("logs in successfully", async () => {
-    mockSql.mockResolvedValueOnce([{ user_id: 1, name: "A", email: "a@b.com", password: "hashed", role: "recruiter" }]);
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, name: "A", email: "a@b.com", password: "hashed", role: "recruiter" });
     mockBcryptCompare.mockResolvedValueOnce(true);
-    mockSql.mockResolvedValueOnce([]);
+    mockUserUpdate.mockResolvedValueOnce({});
     const res = mockRes();
     await MODULES.login(mockReq({ body: { email: "a@b.com", password: "correct" } }), res);
     expect(res.cookie).toHaveBeenCalledTimes(2);
@@ -179,8 +185,8 @@ describe("logout", () => {
   });
 
   it("logs out successfully", async () => {
-    mockSql.mockResolvedValueOnce([{ user_id: 1, refresh_token: "rt" }]);
-    mockSql.mockResolvedValueOnce([]);
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, refresh_token: "rt" });
+    mockUserUpdate.mockResolvedValueOnce({});
     const res = mockRes();
     await MODULES.logout(mockReq({ user: { user_id: 1 }, cookies: { refreshToken: "rt" } }), res);
     expect(res.clearCookie).toHaveBeenCalledTimes(2);
@@ -198,7 +204,7 @@ describe("getMe", () => {
   });
 
   it("returns user profile", async () => {
-    mockSql.mockResolvedValueOnce([{ user_id: 1, name: "A", role: "recruiter" }]);
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, name: "A", role: "recruiter" });
     const res = mockRes();
     await MODULES.getMe(mockReq({ user: { user_id: 1 } }), res);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
@@ -215,14 +221,14 @@ describe("forgotPassword", () => {
   });
 
   it("returns generic message even if email not found", async () => {
-    mockSql.mockResolvedValueOnce([]);
+    mockUserFindFirst.mockResolvedValueOnce(null);
     const res = mockRes();
     await MODULES.forgotPassword(mockReq({ body: { email: "nobody@b.com" } }), res);
     expect(res.json).toHaveBeenCalledWith({ success: true, message: expect.stringContaining("reset link") });
   });
 
   it("sends reset email for existing user", async () => {
-    mockSql.mockResolvedValueOnce([{ user_id: 1, email: "a@b.com", name: "A" }]);
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, email: "a@b.com", name: "A" });
     process.env.FRONTEND_URL = "http://localhost:3000";
     const res = mockRes();
     await MODULES.forgotPassword(mockReq({ body: { email: "a@b.com" } }), res);

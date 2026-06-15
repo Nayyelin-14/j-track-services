@@ -80,7 +80,7 @@ export const addSkills = TryCatch(async (req: AuthRequest, res: Response) => {
   return res.json({
     success: true,
     message: "Skills added",
-    skills: userSkills.map((us) => us.skill),
+    skills: userSkills.map((us: { skill: unknown }) => us.skill),
   });
 });
 
@@ -127,7 +127,7 @@ export const removeSkills = TryCatch(async (req: AuthRequest, res: Response) => 
   return res.json({
     success: true,
     message: "Skills removed",
-    skills: remaining.map((us) => us.skill),
+    skills: remaining.map((us: { skill: unknown }) => us.skill),
   });
 });
 
