@@ -272,7 +272,7 @@ jobs:
         run: pnpm --filter e2e exec vitest run src/smoke.test.ts
 
   docker-build:
-    needs: [changes, build]
+    needs: [changes, build, smoke-e2e]
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
     services:
