@@ -1,2 +1,5 @@
+# Default: all services in Docker for development.
+# Includes redis, kafka, auth, user, jobservice, utils, nginx.
+# Runs everything in containers. No host services needed.
 include:
   - docker-compose.dev.yml

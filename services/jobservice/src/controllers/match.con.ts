@@ -1,5 +1,5 @@
 import { Response } from "express";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
@@ -53,9 +53,10 @@ export const analyzeJobMatch = TryCatch(async (req: AuthRequest, res: Response) 
     throw new ErrorHandler(400, "Invalid job ID");
   }
 
-  const [userRow] = await sql`
-    SELECT resume FROM users WHERE user_id = ${user.user_id} LIMIT 1
-  `;
+  const userRow = await prisma.user.findFirst({
+    where: { user_id: user.user_id },
+    select: { resume: true },
+  });
   if (!userRow) {
     throw new ErrorHandler(404, "User not found");
   }
@@ -63,24 +64,23 @@ export const analyzeJobMatch = TryCatch(async (req: AuthRequest, res: Response) 
     throw new ErrorHandler(400, "No resume found. Please upload a resume first.");
   }
 
-  const [job] = await sql`
-    SELECT
-      j.title,
-      j.description,
-      j.salary,
-      j.location,
-      j.job_type,
-      j.work_location,
-      j.role,
-      c.name AS company_name
-    FROM jobs j
-    JOIN companies c ON j.company_id = c.company_id
-    WHERE j.job_id = ${jobId}
-    LIMIT 1
-  `;
-  if (!job) {
+  const rawJob = await prisma.job.findFirst({
+    where: { job_id: jobId },
+    select: {
+      title: true,
+      description: true,
+      salary: true,
+      location: true,
+      job_type: true,
+      work_location: true,
+      role: true,
+      company: { select: { name: true } },
+    },
+  });
+  if (!rawJob) {
     throw new ErrorHandler(404, "Job not found");
   }
+  const job = { ...rawJob, company_name: rawJob.company.name };
 
   if (!UTILS_SERVICE_URL) {
     throw new ErrorHandler(500, "Utils service URL not configured");

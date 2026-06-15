@@ -1,0 +1,161 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DB_URL")
+}
+
+enum user_role {
+  jobseeker
+  recruiter
+}
+
+enum subscription_tier {
+  free
+  premium
+}
+
+enum job_type {
+  Full_time  @map("Full-time")
+  Part_time  @map("Part-time")
+  Contract
+  Internship
+}
+
+enum work_location {
+  On_site @map("On-site")
+  Remote
+  Hybrid
+}
+
+enum application_status {
+  Submitted
+  Rejected
+  Hired
+  Applied
+}
+
+model User {
+  user_id               Int               @id @default(autoincrement())
+  name                  String            @db.VarChar(255)
+  email                 String            @unique @db.VarChar(255)
+  password              String            @db.VarChar(255)
+  phone_number          String            @db.VarChar(20)
+  role                  user_role
+  bio                   String?
+  resume                String?           @db.VarChar(255)
+  refresh_token         String?
+  resume_public_id      String?           @db.VarChar(255)
+  profile_pic           String?           @db.VarChar(255)
+  profile_pic_public_id String?           @db.VarChar(255)
+  created_at            DateTime          @default(now()) @db.Timestamptz(6)
+  subscription          DateTime?         @db.Timestamptz(6)
+  subscription_tier     subscription_tier @default(free)
+  search_vector         Unsupported("tsvector")?
+
+  user_skills   UserSkill[]
+  notifications Notification[]
+
+  @@map("users")
+}
+
+model Skill {
+  skill_id    Int         @id @default(autoincrement())
+  name        String      @unique @db.VarChar(100)
+  user_skills UserSkill[]
+
+  @@map("skills")
+}
+
+model UserSkill {
+  user_id  Int
+  skill_id Int
+  user     User  @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  skill    Skill @relation(fields: [skill_id], references: [skill_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([user_id, skill_id])
+  @@map("user_skills")
+}
+
+model Notification {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  type       String   @db.VarChar(50)
+  message    String
+  metadata   Json     @default("{}")
+  is_read    Boolean  @default(false)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id])
+  @@index([user_id, is_read])
+  @@map("notifications")
+}
+
+model Company {
+  company_id      Int      @id @default(autoincrement())
+  name            String   @unique @db.VarChar(255)
+  description     String
+  website         String   @db.VarChar(255)
+  location        String?  @db.VarChar(255)
+  logo            String?  @db.VarChar(255)
+  logo_public_id  String?  @db.VarChar(255)
+  recruiter_id    Int
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+  search_vector   Unsupported("tsvector")?
+
+  jobs Job[]
+
+  @@map("companies")
+}
+
+model Job {
+  job_id                 Int            @id @default(autoincrement())
+  title                  String         @db.VarChar(255)
+  description            String
+  salary                 Decimal?       @db.Decimal(10, 2)
+  location               String?        @db.VarChar(255)
+  job_type               job_type
+  openings               Decimal        @db.Decimal(3, 1)
+  role                   String         @db.VarChar(255)
+  work_location          work_location
+  company_id             Int
+  posted_by_recruiter_id Int
+  created_at             DateTime       @default(now()) @db.Timestamptz(6)
+  is_active              Boolean?       @default(true)
+  applications           Application[]
+  job_analytics          JobAnalytics[]
+  company                Company        @relation(fields: [company_id], references: [company_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("jobs")
+}
+
+model Application {
+  application_id  Int                @id @default(autoincrement())
+  job_id          Int
+  applicant_id    Int
+  applicant_email String             @db.VarChar(255)
+  status          application_status @default(Applied)
+  resume          String?            @db.VarChar(255)
+  applied_at      DateTime           @default(now()) @db.Timestamptz(6)
+  subscribed      Boolean?
+  job             Job                @relation(fields: [job_id], references: [job_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([job_id, applicant_id])
+  @@map("applications")
+}
+
+model JobAnalytics {
+  job_id         Int
+  date           DateTime @default(dbgenerated("CURRENT_DATE")) @db.Date
+  views          Int      @default(0)
+  applications   Int      @default(0)
+  status_changes Int      @default(0)
+  job            Job      @relation(fields: [job_id], references: [job_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([job_id, date])
+  @@map("job_analytics")
+}

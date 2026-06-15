@@ -1,5 +1,5 @@
 import { Kafka, Consumer } from "kafkajs";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import type { JobEvent } from "@jtrack/shared/kafka/events";
 import type { KafkaHealth } from "@jtrack/shared/kafka/types";
 import { resolveKafkaConfig, checkKafkaHealth } from "@jtrack/shared";
@@ -58,15 +58,26 @@ export function createAnalyticsConsumer() {
           if (!delta) return;
 
           try {
-            await sql`
-              INSERT INTO job_analytics (job_id, date, views, applications, status_changes)
-              VALUES (${delta.job_id}, ${delta.date}::date, ${delta.views}, ${delta.applications}, ${delta.status_changes})
-              ON CONFLICT (job_id, date)
-              DO UPDATE SET
-                views = job_analytics.views + EXCLUDED.views,
-                applications = job_analytics.applications + EXCLUDED.applications,
-                status_changes = job_analytics.status_changes + EXCLUDED.status_changes
-            `;
+            await prisma.jobAnalytics.upsert({
+              where: {
+                job_id_date: {
+                  job_id: delta.job_id,
+                  date: new Date(delta.date),
+                },
+              },
+              create: {
+                job_id: delta.job_id,
+                date: new Date(delta.date),
+                views: delta.views,
+                applications: delta.applications,
+                status_changes: delta.status_changes,
+              },
+              update: {
+                views: { increment: delta.views },
+                applications: { increment: delta.applications },
+                status_changes: { increment: delta.status_changes },
+              },
+            });
           } catch (err) {
             console.error(`[Analytics Consumer] DB upsert failed for job ${delta.job_id}:`, err);
           }

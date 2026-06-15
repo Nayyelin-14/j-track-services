@@ -1,3 +1,7 @@
+# Nginx-only in Docker, proxies to services running natively on host.
+# Run `pnpm dev` in another terminal, then `docker compose -f docker-compose.local.yml up`.
+# On Linux, extra_hosts is needed for host.docker.internal to resolve.
+
 services:
   nginx:
     build:
@@ -9,3 +13,5 @@ services:
       - "80:80"
     volumes:
       - ./nginx/dev/conf.d/default.conf:/etc/nginx/conf.d/default.conf
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

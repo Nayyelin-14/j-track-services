@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
@@ -32,37 +32,43 @@ export const addSkills = TryCatch(async (req: AuthRequest, res: Response) => {
     throw new ErrorHandler(400, "No valid skill names provided");
   }
 
-  const [userExists] = await sql`
-    SELECT user_id FROM users WHERE user_id = ${userData.user_id} LIMIT 1
-  `;
+  const userExists = await prisma.user.findFirst({
+    where: { user_id: userData.user_id },
+    select: { user_id: true },
+  });
   if (!userExists) throw new ErrorHandler(404, "User not found");
 
-  const skillIds: number[] = [];
   for (const name of sanitized) {
-    const [skill] = await sql`
-      INSERT INTO skills (name)
-      VALUES (${name})
-      ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-      RETURNING skill_id
-    `;
-    skillIds.push(skill?.skill_id);
+    const skill = await prisma.skill.upsert({
+      where: { name },
+      create: { name },
+      update: {},
+    });
+
+    await prisma.userSkill.upsert({
+      where: {
+        user_id_skill_id: {
+          user_id: userData.user_id,
+          skill_id: skill.skill_id,
+        },
+      },
+      create: {
+        user_id: userData.user_id,
+        skill_id: skill.skill_id,
+      },
+      update: {},
+    });
   }
 
-  for (const skillId of skillIds) {
-    await sql`
-      INSERT INTO user_skills (user_id, skill_id)
-      VALUES (${userData.user_id}, ${skillId})
-      ON CONFLICT DO NOTHING
-    `;
-  }
-
-  const userSkills = await sql`
-    SELECT s.skill_id, s.name
-    FROM user_skills us
-    JOIN skills s ON us.skill_id = s.skill_id
-    WHERE us.user_id = ${userData.user_id}
-    ORDER BY s.name
-  `;
+  const userSkills = await prisma.userSkill.findMany({
+    where: { user_id: userData.user_id },
+    select: {
+      skill: {
+        select: { skill_id: true, name: true },
+      },
+    },
+    orderBy: { skill: { name: "asc" } },
+  });
 
   await invalidateUserCache(userData.user_id);
   try {
@@ -74,7 +80,7 @@ export const addSkills = TryCatch(async (req: AuthRequest, res: Response) => {
   return res.json({
     success: true,
     message: "Skills added",
-    skills: userSkills,
+    skills: userSkills.map((us) => us.skill),
   });
 });
 
@@ -99,26 +105,29 @@ export const removeSkills = TryCatch(async (req: AuthRequest, res: Response) => 
     throw new ErrorHandler(400, "No valid skill IDs provided");
   }
 
-  await sql`
-    DELETE FROM user_skills
-    WHERE user_id = ${userData.user_id}
-      AND skill_id = ANY(${validIds}::int[])
-  `;
+  await prisma.userSkill.deleteMany({
+    where: {
+      user_id: userData.user_id,
+      skill_id: { in: validIds },
+    },
+  });
 
-  const remaining = await sql`
-    SELECT s.skill_id, s.name
-    FROM user_skills us
-    JOIN skills s ON us.skill_id = s.skill_id
-    WHERE us.user_id = ${userData.user_id}
-    ORDER BY s.name
-  `;
+  const remaining = await prisma.userSkill.findMany({
+    where: { user_id: userData.user_id },
+    select: {
+      skill: {
+        select: { skill_id: true, name: true },
+      },
+    },
+    orderBy: { skill: { name: "asc" } },
+  });
 
   await invalidateUserCache(userData.user_id);
 
   return res.json({
     success: true,
     message: "Skills removed",
-    skills: remaining,
+    skills: remaining.map((us) => us.skill),
   });
 });
 
@@ -128,9 +137,10 @@ export const getAllSkills = TryCatch(async (_req: Request, res: Response) => {
     CACHE_KEYS.skills,
     3600,
     async () => {
-      return await sql`
-        SELECT skill_id, name FROM skills ORDER BY name
-      `;
+      return await prisma.skill.findMany({
+        select: { skill_id: true, name: true },
+        orderBy: { name: "asc" },
+      });
     },
   );
 

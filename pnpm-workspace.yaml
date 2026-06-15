@@ -4,6 +4,9 @@ packages:
   - 'e2e'
 allowBuilds:
   '@google/genai': true
+  '@prisma/client': true
+  '@prisma/engines': true
   bcrypt: true
   esbuild: true
+  prisma: true
   protobufjs: true

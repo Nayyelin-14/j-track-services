@@ -1,5 +1,5 @@
 import { Kafka, Consumer } from "kafkajs";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import type { JobAppliedEvent } from "@jtrack/shared/kafka/events";
 import type { KafkaHealth, ConsumerInstance } from "@jtrack/shared/kafka/types";
 import { resolveKafkaConfig, checkKafkaHealth } from "@jtrack/shared";
@@ -99,39 +99,41 @@ export function createNotificationConsumer(): ConsumerInstance {
           const { job_id, applicant_id } = event as JobAppliedEvent;
 
           try {
-            const [job] = await sql`
-              SELECT j.title, c.name AS company_name, c.recruiter_id
-              FROM jobs j
-              INNER JOIN companies c ON j.company_id = c.company_id
-              WHERE j.job_id = ${job_id}
-              LIMIT 1
-            `;
+            const job = await prisma.job.findFirst({
+              where: { job_id },
+              select: {
+                title: true,
+                company: { select: { name: true, recruiter_id: true } },
+              },
+            });
 
             if (!job) {
               console.warn(`[Notification Consumer] Job ${job_id} not found, skipping`);
               return;
             }
 
-            const [recruiter] = await sql`
-              SELECT email FROM users WHERE user_id = ${job.recruiter_id} LIMIT 1
-            `;
+            const recruiter = await prisma.user.findFirst({
+              where: { user_id: job.company.recruiter_id },
+              select: { email: true },
+            });
 
             if (!recruiter) {
-              console.warn(`[Notification Consumer] Recruiter ${job.recruiter_id} not found, skipping`);
+              console.warn(`[Notification Consumer] Recruiter ${job.company.recruiter_id} not found, skipping`);
               return;
             }
 
-            const [applicant] = await sql`
-              SELECT name FROM users WHERE user_id = ${applicant_id} LIMIT 1
-            `;
+            const applicant = await prisma.user.findFirst({
+              where: { user_id: applicant_id },
+              select: { name: true },
+            });
 
             const applicantName = applicant?.name || `User #${applicant_id}`;
 
             await sendWithRetry(transporter, {
               from: process.env.MAIL_USER,
               to: recruiter.email,
-              subject: `New Application: ${job.title} at ${job.company_name}`,
-              html: newApplicationTemplate(applicantName, job.title, job.company_name),
+              subject: `New Application: ${job.title} at ${job.company.name}`,
+              html: newApplicationTemplate(applicantName, job.title, job.company.name),
             }, "Notification");
 
             console.log(`[Notification] Sent new application alert to recruiter ${recruiter.email} for job ${job_id}`);

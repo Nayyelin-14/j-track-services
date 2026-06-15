@@ -1,4 +1,4 @@
-FROM node:20-alpine AS base
+FROM node:22-alpine AS base
 RUN npm install -g pnpm@9
 WORKDIR /app
 
@@ -22,6 +22,7 @@ WORKDIR /app
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages/shared/package.json ./packages/shared/
+COPY --from=build /app/packages/shared/prisma ./packages/shared/prisma/
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist/
 COPY --from=build /app/services/utils/package.json ./services/utils/
 COPY --from=build /app/services/utils/dist ./services/utils/dist/

@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import axios from "axios";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import { getBuffer } from "@jtrack/shared/buffer";
@@ -29,9 +29,10 @@ export const uploadProfilePic = TryCatch(
       throw new ErrorHandler(500, "Failed to process image");
     }
 
-    const [currentUser] = await sql`
-    SELECT profile_pic_public_id FROM users WHERE user_id = ${userData.user_id} LIMIT 1
-  `;
+    const currentUser = await prisma.user.findFirst({
+      where: { user_id: userData.user_id },
+      select: { profile_pic_public_id: true },
+    });
     if (!currentUser) throw new ErrorHandler(404, "User not found");
 
     const uploadPayload: Record<string, string> = {
@@ -59,12 +60,11 @@ export const uploadProfilePic = TryCatch(
       throw new ErrorHandler(500, "Invalid response from upload service");
     }
 
-    const [updated] = await sql`
-    UPDATE users
-    SET profile_pic = ${url}, profile_pic_public_id = ${public_id}
-    WHERE user_id = ${userData.user_id}
-    RETURNING user_id, profile_pic
-  `;
+    const updated = await prisma.user.update({
+      where: { user_id: userData.user_id },
+      data: { profile_pic: url, profile_pic_public_id: public_id },
+      select: { user_id: true, profile_pic: true },
+    });
 
     await invalidateUserCache(userData.user_id);
 
@@ -102,9 +102,10 @@ export const uploadResume = TryCatch(async (req: AuthRequest, res: Response) => 
     throw new ErrorHandler(500, "Failed to process resume file");
   }
 
-  const [currentUser] = await sql`
-    SELECT resume_public_id FROM users WHERE user_id = ${userData.user_id} LIMIT 1
-  `;
+  const currentUser = await prisma.user.findFirst({
+    where: { user_id: userData.user_id },
+    select: { resume_public_id: true },
+  });
   if (!currentUser) throw new ErrorHandler(404, "User not found");
 
   const uploadPayload: Record<string, string> = {
@@ -132,12 +133,11 @@ export const uploadResume = TryCatch(async (req: AuthRequest, res: Response) => 
     throw new ErrorHandler(500, "Invalid response from upload service");
   }
 
-  const [updated] = await sql`
-    UPDATE users
-    SET resume = ${url}, resume_public_id = ${public_id}
-    WHERE user_id = ${userData.user_id}
-    RETURNING user_id, resume
-  `;
+  const updated = await prisma.user.update({
+    where: { user_id: userData.user_id },
+    data: { resume: url, resume_public_id: public_id },
+    select: { user_id: true, resume: true },
+  });
 
   await invalidateUserCache(userData.user_id);
 

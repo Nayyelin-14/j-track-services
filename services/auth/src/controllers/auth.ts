@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import axios from "axios";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import {
   signAccessToken,
@@ -14,7 +14,7 @@ import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import { getBuffer } from "@jtrack/shared/buffer";
 import type { AuthRequest } from "@jtrack/shared/types";
 import { kafka } from "../kafka.js";
-import { createRedisHelpers, withCache } from "@jtrack/shared/redis/helpers";
+import { createRedisHelpers } from "@jtrack/shared/redis/helpers";
 import { redisClient } from "../redis.js";
 import { resetPasswordEmailTemplate } from "../template.js";
 
@@ -37,12 +37,10 @@ export const register = TryCatch(async (req: Request, res: Response) => {
     throw new ErrorHandler(400, "All fields are required");
   }
 
-  const [existingUser] = await sql`
-    SELECT email
-    FROM users
-    WHERE email = ${email}
-    LIMIT 1
-  `;
+  const existingUser = await prisma.user.findFirst({
+    where: { email },
+    select: { email: true },
+  });
   if (existingUser) {
     throw new ErrorHandler(400, "User already exists");
   }
@@ -53,18 +51,21 @@ export const register = TryCatch(async (req: Request, res: Response) => {
 
   const hashedPassword = await bcrypt.hash(password, 12);
 
-  let registerUser;
   if (role === "recruiter") {
-    const [user] = await sql`
-    INSERT INTO users (name, email, password, phone_number, role)
-    VALUES (${name}, ${email}, ${hashedPassword}, ${phone_number}, ${role}) RETURNING user_id , name , email , phone_number , role , created_at
-  `;
-    registerUser = user;
+    await prisma.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        phone_number,
+        role: "recruiter",
+      },
+    });
   } else if (role === "jobseeker") {
     const file = req?.file;
 
-    let url = null;
-    let public_id = null;
+    let url: string | null = null;
+    let public_id: string | null = null;
 
     if (file) {
       const fileBuffer = getBuffer(file);
@@ -79,12 +80,18 @@ export const register = TryCatch(async (req: Request, res: Response) => {
       }
     }
 
-    const [user] = await sql`
-    INSERT INTO users (name, email, password, phone_number, role , bio , resume ,resume_public_id  )
-    VALUES (${name}, ${email}, ${hashedPassword}, ${phone_number}, ${role} ,${bio} , ${url} ,${public_id} )
-    RETURNING user_id , name , email , phone_number , role ,bio ,resume , resume_public_id, created_at
-  `;
-    registerUser = user;
+    await prisma.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        phone_number,
+        role: "jobseeker",
+        bio,
+        resume: url,
+        resume_public_id: public_id,
+      },
+    });
   }
 
   return res.status(201).json({
@@ -99,12 +106,10 @@ export const login = TryCatch(async (req: Request, res: Response) => {
     throw new ErrorHandler(400, "Credentials required");
   }
 
-  const [user] = await sql`
-    SELECT user_id, name, email, password, role
-    FROM users
-    WHERE email = ${email}
-    LIMIT 1
-  `;
+  const user = await prisma.user.findFirst({
+    where: { email },
+    select: { user_id: true, name: true, email: true, password: true, role: true },
+  });
 
   if (!user) {
     throw new ErrorHandler(401, "Invalid credentials");
@@ -120,11 +125,10 @@ export const login = TryCatch(async (req: Request, res: Response) => {
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken(payload);
 
-  await sql`
-    UPDATE users
-    SET refresh_token = ${refreshToken}
-    WHERE user_id = ${user.user_id}
-  `;
+  await prisma.user.update({
+    where: { user_id: user.user_id },
+    data: { refresh_token: refreshToken },
+  });
 
   res.cookie("accessToken", accessToken, accessCookieOptions);
   res.cookie("refreshToken", refreshToken, refreshCookieOptions);
@@ -149,12 +153,10 @@ export const logout = TryCatch(async (req: AuthRequest, res: Response) => {
     throw new ErrorHandler(401, "Unauthorized");
   }
 
-  const [user] = await sql`
-    SELECT user_id, refresh_token
-    FROM users
-    WHERE user_id = ${userData.user_id}
-    LIMIT 1
-  `;
+  const user = await prisma.user.findFirst({
+    where: { user_id: userData.user_id },
+    select: { user_id: true, refresh_token: true },
+  });
 
   if (!user) {
     throw new ErrorHandler(404, "User not found");
@@ -164,11 +166,10 @@ export const logout = TryCatch(async (req: AuthRequest, res: Response) => {
     throw new ErrorHandler(401, "Invalid session");
   }
 
-  await sql`
-    UPDATE users
-    SET refresh_token = NULL
-    WHERE user_id = ${user.user_id}
-  `;
+  await prisma.user.update({
+    where: { user_id: user.user_id },
+    data: { refresh_token: null },
+  });
 
   res.clearCookie("accessToken");
   res.clearCookie("refreshToken");
@@ -208,21 +209,20 @@ export const getMe = TryCatch(async (req: AuthRequest, res: Response) => {
     console.warn("[Redis] Cache read error (non-fatal):", err);
   }
 
-  const [user] = await sql`
-    SELECT
-      user_id,
-      name,
-      email,
-      role,
-      phone_number,
-      bio,
-      resume,
-      profile_pic,
-      created_at
-    FROM users
-    WHERE user_id = ${userData.user_id}
-    LIMIT 1
-  `;
+  const user = await prisma.user.findFirst({
+    where: { user_id: userData.user_id },
+    select: {
+      user_id: true,
+      name: true,
+      email: true,
+      role: true,
+      phone_number: true,
+      bio: true,
+      resume: true,
+      profile_pic: true,
+      created_at: true,
+    },
+  });
 
   if (!user) {
     throw new ErrorHandler(404, "User not found");
@@ -245,12 +245,10 @@ export const forgotPassword = TryCatch(async (req: Request, res: Response) => {
   if (!email) throw new ErrorHandler(400, "Email is required");
   await checkForgotPasswordRate(email);
 
-  const [user] = await sql`
-    SELECT user_id, email, name
-    FROM users
-    WHERE email = ${email}
-    LIMIT 1
-  `;
+  const user = await prisma.user.findFirst({
+    where: { email },
+    select: { user_id: true, email: true, name: true },
+  });
 
   if (!user) {
     return res.status(200).json({
@@ -331,22 +329,20 @@ export const resetPassword = TryCatch(async (req: Request, res: Response) => {
     throw new ErrorHandler(400, "Reset link has already been used or expired");
   }
 
-  const [user] = await sql`
-    SELECT user_id FROM users
-    WHERE user_id = ${payload.user_id} AND email = ${payload.email}
-    LIMIT 1
-  `;
+  const user = await prisma.user.findFirst({
+    where: { user_id: payload.user_id, email: payload.email },
+    select: { user_id: true },
+  });
 
   if (!user) throw new ErrorHandler(404, "User no longer exists");
 
   await clearFailedResetAttempts(payload.user_id, payload.email);
   const hashedPassword = await bcrypt.hash(newPassword, 12);
 
-  await sql`
-    UPDATE users
-    SET password = ${hashedPassword}
-    WHERE user_id = ${payload.user_id}
-  `;
+  await prisma.user.update({
+    where: { user_id: payload.user_id },
+    data: { password: hashedPassword },
+  });
 
   await deleteRedisValue(
     `${RESET_TOKEN_PREFIX}${payload.user_id}${payload.email}`,
@@ -381,12 +377,14 @@ export const changePassword = TryCatch(async (req: AuthRequest, res: Response) =
     );
   }
 
-  const [user] = await sql`
-    SELECT user_id, password
-    FROM users
-    WHERE user_id = ${user_id}
-    LIMIT 1
-  `;
+  if (!user_id) {
+    throw new ErrorHandler(401, "Unauthorized");
+  }
+
+  const user = await prisma.user.findFirst({
+    where: { user_id },
+    select: { user_id: true, password: true },
+  });
   if (!user) throw new ErrorHandler(404, "User not found");
 
   const isMatch = await bcrypt.compare(currentPassword, user.password);
@@ -394,24 +392,20 @@ export const changePassword = TryCatch(async (req: AuthRequest, res: Response) =
 
   const hashedPassword = await bcrypt.hash(newPassword, 12);
 
-  await sql`
-    UPDATE users
-    SET password = ${hashedPassword}
-    WHERE user_id = ${user_id}
-  `;
+  await prisma.user.update({
+    where: { user_id },
+    data: { password: hashedPassword },
+  });
 
-  await sql`
-    UPDATE users
-    SET refresh_token = NULL
-    WHERE user_id = ${user_id}
-  `;
+  await prisma.user.update({
+    where: { user_id },
+    data: { refresh_token: null },
+  });
 
   res.clearCookie("accessToken");
   res.clearCookie("refreshToken");
 
-  if (user_id) {
-    await invalidateUserAuthCache(user_id);
-  }
+  await invalidateUserAuthCache(user_id);
 
   return res.status(200).json({
     success: true,

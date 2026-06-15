@@ -32,10 +32,10 @@ jobs:
         run: touch .env
 
       - name: Validate docker-compose syntax
-        run: docker compose -f docker-compose.yml config
+        run: docker compose -f docker-compose.dev.yml config
 
       - name: Validate prod docker-compose syntax
-        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+        run: docker compose -f docker-compose.prod.yml config
 
       - name: Create dummy SSL certs for nginx validation
         run: |
@@ -131,12 +131,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
-      # Policy: moderate/low vulnerabilities tracked by Dependabot (see .github/dependabot.yml)
       - name: pnpm audit
         run: pnpm audit --audit-level=high
 
@@ -351,14 +350,14 @@ jobs:
           IMAGE="${{ steps.reg.outputs.base }}/${{ matrix.service }}:${{ github.sha }}"
           echo "Starting container..."
           CID=$(docker run -d --network host \
-            -e DB_URL="$DB_URL" \
-            -e REDIS_URL="$REDIS_URL" \
-            -e KAFKA_BROKER="$KAFKA_BROKER" \
-            -e JWT_ACCESS_SECRET="$JWT_ACCESS_SECRET" \
-            -e JWT_REFRESH_SECRET="$JWT_REFRESH_SECRET" \
-            -e JWT_RESET_SECRET="$JWT_RESET_SECRET" \
-            -e UTILS_SERVICE_URL="$UTILS_SERVICE_URL" \
-            -e FRONTEND_URL="$FRONTEND_URL" \
+            -e "DB_URL=$DB_URL" \
+            -e "REDIS_URL=$REDIS_URL" \
+            -e "KAFKA_BROKER=$KAFKA_BROKER" \
+            -e "JWT_ACCESS_SECRET=$JWT_ACCESS_SECRET" \
+            -e "JWT_REFRESH_SECRET=$JWT_REFRESH_SECRET" \
+            -e "JWT_RESET_SECRET=$JWT_RESET_SECRET" \
+            -e "UTILS_SERVICE_URL=$UTILS_SERVICE_URL" \
+            -e "FRONTEND_URL=$FRONTEND_URL" \
             "$IMAGE")
           for i in $(seq 1 10); do
             sleep 2

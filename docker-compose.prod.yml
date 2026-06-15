@@ -1,10 +1,14 @@
+# Production deployment.
+# Services are pre-built by CI and pushed to GHCR.
+# Set GHCR_REPO env var or replace ghcr.io/your-org/your-repo below.
+
 services:
   redis:
     image: redis:7-alpine
     container_name: jtrack-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    expose:
+      - "6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -15,8 +19,8 @@ services:
     image: apache/kafka:4.2.0
     container_name: jtrack-kafka
     restart: unless-stopped
-    ports:
-      - "9092:9092"
+    expose:
+      - "9092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -35,9 +39,7 @@ services:
       retries: 5
 
   auth:
-    build:
-      context: .
-      dockerfile: services/auth/Dockerfile
+    image: ${GHCR_REPO:-ghcr.io/your-org/your-repo}/auth:latest
     container_name: jtrack-auth
     restart: unless-stopped
     depends_on:
@@ -53,9 +55,7 @@ services:
       UTILS_SERVICE_URL: http://utils:6001/api/utils
 
   user:
-    build:
-      context: .
-      dockerfile: services/user/Dockerfile
+    image: ${GHCR_REPO:-ghcr.io/your-org/your-repo}/user:latest
     container_name: jtrack-user
     restart: unless-stopped
     depends_on:
@@ -68,9 +68,7 @@ services:
       UTILS_SERVICE_URL: http://utils:6001/api/utils
 
   jobservice:
-    build:
-      context: .
-      dockerfile: services/jobservice/Dockerfile
+    image: ${GHCR_REPO:-ghcr.io/your-org/your-repo}/jobservice:latest
     container_name: jtrack-job
     restart: unless-stopped
     depends_on:
@@ -86,9 +84,7 @@ services:
       UTILS_SERVICE_URL: http://utils:6001/api/utils
 
   utils:
-    build:
-      context: .
-      dockerfile: services/utils/Dockerfile
+    image: ${GHCR_REPO:-ghcr.io/your-org/your-repo}/utils:latest
     container_name: jtrack-utils
     restart: unless-stopped
     depends_on:

@@ -1,5 +1,5 @@
 import { Response, NextFunction } from "express";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
@@ -17,47 +17,46 @@ export const getJobAnalytics = TryCatch(
 
     const job_id = sanitizePositiveInt(req.params.job_id, "Job ID");
 
-    const [job] = await sql`
-      SELECT
-        j.job_id,
-        j.title,
-        j.is_active,
-        j.created_at,
-        c.recruiter_id
-      FROM jobs j
-      INNER JOIN companies c ON j.company_id = c.company_id
-      WHERE j.job_id = ${job_id}
-      LIMIT 1
-    `;
+    const job = await prisma.job.findFirst({
+      where: { job_id },
+      select: {
+        job_id: true,
+        title: true,
+        is_active: true,
+        created_at: true,
+        company: { select: { recruiter_id: true } },
+      },
+    });
 
     if (!job) {
       return next(new ErrorHandler(404, "Job not found"));
     }
 
-    if (job.recruiter_id !== req.user.user_id) {
+    if (job.company.recruiter_id !== req.user.user_id) {
       return next(new ErrorHandler(403, "You do not own this job"));
     }
 
-    const daily = await sql`
-      SELECT
-        date,
-        views,
-        applications,
-        status_changes
-      FROM job_analytics
-      WHERE job_id = ${job_id}
-      ORDER BY date DESC
-      LIMIT 90
-    `;
+    const daily = await prisma.jobAnalytics.findMany({
+      where: { job_id },
+      select: {
+        date: true,
+        views: true,
+        applications: true,
+        status_changes: true,
+      },
+      orderBy: { date: "desc" },
+      take: 90,
+    });
 
-    const totals = await sql`
-      SELECT
-        COALESCE(SUM(views), 0)::int         AS total_views,
-        COALESCE(SUM(applications), 0)::int  AS total_applications,
-        COALESCE(SUM(status_changes), 0)::int AS total_status_changes
-      FROM job_analytics
-      WHERE job_id = ${job_id}
-    `;
+    const aggregated = await prisma.jobAnalytics.aggregate({
+      where: { job_id },
+      _sum: { views: true, applications: true, status_changes: true },
+    });
+    const totals = {
+      total_views: aggregated._sum.views ?? 0,
+      total_applications: aggregated._sum.applications ?? 0,
+      total_status_changes: aggregated._sum.status_changes ?? 0,
+    };
 
     return res.status(200).json({
       success: true,
@@ -66,7 +65,7 @@ export const getJobAnalytics = TryCatch(
       is_active: job.is_active,
       created_at: job.created_at,
       analytics: {
-        ...totals[0],
+        ...totals,
         daily,
       },
     });

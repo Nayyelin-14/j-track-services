@@ -141,6 +141,7 @@ Adjust the `FRONTEND_URL` environment variable for production deployments.
 | **Language** | TypeScript 6 |
 | **Framework** | Express 5 |
 | **Database** | PostgreSQL |
+| **ORM** | Prisma 6 |
 | **Cache** | Redis 7 |
 | **Message Broker** | Apache Kafka (via `kafkajs`) |
 | **AI** | Groq, Google Gemini |
@@ -152,6 +153,7 @@ Adjust the `FRONTEND_URL` environment variable for production deployments.
 | **CI/CD** | GitHub Actions |
 | **Container Registry** | GitHub Container Registry (GHCR) |
 | **Monorepo** | pnpm workspaces |
+| **Migrations** | Prisma Migrate |
 
 ---
 
@@ -422,6 +424,8 @@ pnpm tsx seed.ts
 
 Populates: 2 recruiters, 8 jobseekers, 3 companies, 8 jobs, 10 skills, 15 applications.
 
+> **Note:** Migrations are applied automatically at service startup via `prisma migrate deploy`. No manual migration step needed after the initial `prisma migrate dev` during local development.
+
 ---
 
 ## Shared Library (`@jtrack/shared`)
@@ -430,7 +434,7 @@ Reusable modules consumed by all services via `"@jtrack/shared": "workspace:*"`:
 
 | Module | Export | Purpose |
 |--------|--------|---------|
-| `db` | `sql` | Neon serverless PostgreSQL client |
+| `db` | `prisma` | PrismaClient singleton |
 | `token` | `signAccessToken`, `signRefreshToken`, `signResetToken` | JWT helpers (15min / 7d / 15min) |
 | `cookies` | `accessCookieOptions`, `refreshCookieOptions` | HTTP-only, secure, sameSite cookie config |
 | `buffer` | `getBuffer` | File → data URI conversion |
@@ -443,6 +447,7 @@ Reusable modules consumed by all services via `"@jtrack/shared": "workspace:*"`:
 | `kafka/config` | `resolveKafkaConfig`, `sleep` | Shared Kafka config builder |
 | `kafka/consumer` | `checkKafkaHealth` | Consumer health check helper |
 | `redis/helpers` | `createRedisHelpers` | Generic Redis get/set/delete + rate limiting |
+| `migrate` | `runMigrationsWithLock` | Runs `prisma migrate deploy` at service startup |
 
 ---
 
@@ -450,10 +455,12 @@ Reusable modules consumed by all services via `"@jtrack/shared": "workspace:*"`:
 
 - **HTTP-only cookies for JWT** — access and refresh tokens stored in secure, httpOnly, sameSite cookies. Prevents XSS token exfiltration. Access token auto-refreshes via `isAuthenticated` middleware when expired but refresh token is valid.
 - **SSE for AI responses** — career guidance, match analysis, and resume scoring stream tokens in real-time via Server-Sent Events rather than blocking on long-running AI inference.
-- **Kafka for event-driven analytics** — job views, applications, and status changes are published as structured events to the `job-events` topic. Two independent consumer groups process the same stream: the analytics consumer (job service) aggregates daily counts into `job_analytics`, and the notification consumer (utils service) sends real-time recruiter alerts.
+- **Kafka for event-driven analytics** — job views, applications, and status changes are published as structured events to the `job-events` topic. Two independent consumer groups process the same stream: the analytics consumer (job service) upserts daily counts into `job_analytics` via Prisma, and the notification consumer (utils service) sends real-time recruiter alerts.
 - **Internal service HTTP calls** — auth, user, and job services call the utils service directly for file uploads and AI analysis. The utils service does not expose auth middleware externally, relying on network-level isolation. Endpoints are rate-limited instead.
 - **pnpm workspaces** — strict dependency isolation with the `.pnpm` virtual store. Dependencies are deduplicated and hoisted only as configured via `.npmrc`.
 - **Redis caching** — user profiles cached for 5 minutes; active jobs and job details cached with TTL. Cache invalidation on writes.
+- **Prisma ORM with raw escape hatches** — the monorepo migrated from raw `pg` SQL to Prisma for auto-generated migrations, type-safe queries, and schema management. ~60 of ~72 queries use Prisma's generated client; the remaining 12 use `$queryRaw` for PostgreSQL-specific features (JSON aggregates, full-text search, COALESCE sums) that don't map cleanly to Prisma's query API.
+- **tsvector full-text search** — `users` and `companies` tables have `search_vector tsvector` columns updated by PL/pgSQL triggers on INSERT/UPDATE, with GIN indexes for efficient search. The Prisma schema uses `Unsupported("tsvector")` for these columns.
 - **Single CI pipeline** — everything runs on PR only (including docker build and push). No redundant pipeline on merge. Critical e2e smoke test on every PR prevents merge of broken cross-service flows.
 
 ---
@@ -506,6 +513,9 @@ j-track-services/
 │   └── ssl/
 ├── packages/
 │   └── shared/                  # @jtrack/shared
+│       ├── prisma/
+│       │   ├── schema.prisma     # Prisma schema (8 tables, 5 enums, tsvector)
+│       │   └── migrations/       # Versioned migration SQL
 │       ├── src/
 │       │   ├── index.ts
 │       │   ├── db.ts
@@ -515,6 +525,7 @@ j-track-services/
 │       │   ├── errorHandler.ts
 │       │   ├── tryCatch.ts
 │       │   ├── isauthenticated.ts
+│       │   ├── migrate.ts        # Runs prisma migrate deploy at startup
 │       │   ├── redis/helpers.ts
 │       │   └── kafka/
 │       └── tsconfig.json
