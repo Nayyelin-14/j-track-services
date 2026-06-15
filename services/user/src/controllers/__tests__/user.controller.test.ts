@@ -1,12 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import axios from "axios";
 
-const mockSql = vi.fn();
+const mockUserFindFirst = vi.fn();
+const mockUserUpdate = vi.fn();
+const mockSkillUpsert = vi.fn();
+const mockSkillFindMany = vi.fn();
+const mockUserSkillUpsert = vi.fn();
+const mockUserSkillFindMany = vi.fn();
+const mockUserSkillDeleteMany = vi.fn();
+const mockPrisma = {
+  user: { findFirst: mockUserFindFirst, update: mockUserUpdate },
+  skill: { upsert: mockSkillUpsert, findMany: mockSkillFindMany },
+  userSkill: { upsert: mockUserSkillUpsert, findMany: mockUserSkillFindMany, deleteMany: mockUserSkillDeleteMany },
+};
 const mockRedisGet = vi.fn();
 const mockRedisSetEx = vi.fn();
+const mockRedisDel = vi.fn();
 const mockGetBuffer = vi.fn((f: any) => ({ content: f?.buffer ?? "datauri" }));
 
-vi.mock("@jtrack/shared/db", () => ({ sql: mockSql }));
+vi.mock("@jtrack/shared/db", () => ({ prisma: mockPrisma }));
 vi.mock("@jtrack/shared/errorHandler", () => ({
   ErrorHandler: class extends Error {
     statusCode: number;
@@ -18,7 +30,7 @@ vi.mock("@jtrack/shared/errorHandler", () => ({
 }));
 vi.mock("@jtrack/shared/buffer", () => ({ getBuffer: mockGetBuffer }));
 vi.mock("../../redis", () => ({
-  redisClient: { get: mockRedisGet, setEx: mockRedisSetEx },
+  redisClient: { get: mockRedisGet, setEx: mockRedisSetEx, del: mockRedisDel },
 }));
 
 const MODULES = await import("../index");
@@ -42,7 +54,7 @@ describe("getMe", () => {
     expect(res.json).toHaveBeenCalledWith({ success: false, message: expect.stringMatching(/unauthorized/i) });
   });
   it("returns user with skills", async () => {
-    mockSql.mockResolvedValueOnce([{ user_id: 1, name: "A", role: "jobseeker", skills: [{ skill_id: 1, name: "TS" }] }]);
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, name: "A", role: "jobseeker", user_skills: [{ skill: { skill_id: 1, name: "TS" } }] });
     const res = mockRes();
     await MODULES.getMe(mockReq({ user: { user_id: 1 } }), res);
     expect(res.json).toHaveBeenCalledWith({ success: true, user: expect.any(Object) });
@@ -65,7 +77,7 @@ describe("getUserById", () => {
   });
   it("fetches and caches user from db", async () => {
     mockRedisGet.mockResolvedValueOnce(null);
-    mockSql.mockResolvedValueOnce([{ user_id: 1, name: "A", role: "jobseeker", skills: [] }]);
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, name: "A", role: "jobseeker", bio: null, profile_pic: null, created_at: new Date(), user_skills: [] });
     const res = mockRes();
     await MODULES.getUserById(mockReq({ params: { id: "1" } }), res);
     expect(mockRedisSetEx).toHaveBeenCalled();
@@ -100,8 +112,8 @@ describe("updateUser", () => {
     expect(res.json).toHaveBeenCalledWith({ success: false, message: expect.stringMatching(/invalid phone/i) });
   });
   it("updates successfully", async () => {
-    mockSql.mockResolvedValueOnce([{ user_id: 1 }]);
-    mockSql.mockResolvedValueOnce([{ user_id: 1, name: "A", email: "a@b.com", role: "recruiter", phone_number: "+123", bio: null, profile_pic: null, created_at: new Date() }]);
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1 });
+    mockUserUpdate.mockResolvedValueOnce({ user_id: 1, name: "A", email: "a@b.com", role: "recruiter", phone_number: "+123", bio: null, profile_pic: null, created_at: new Date() });
     const res = mockRes();
     await MODULES.updateUser(mockReq({ user: { user_id: 1 }, body: { name: "Alice" } }), res);
     expect(res.json).toHaveBeenCalledWith({ success: true, message: "Profile updated", user: expect.any(Object) });
@@ -121,8 +133,8 @@ describe("updateBio", () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
   it("updates bio", async () => {
-    mockSql.mockResolvedValueOnce([{ user_id: 1 }]);
-    mockSql.mockResolvedValueOnce([{ user_id: 1, bio: "Hello" }]);
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1 });
+    mockUserUpdate.mockResolvedValueOnce({ user_id: 1, bio: "Hello" });
     const res = mockRes();
     await MODULES.updateBio(mockReq({ user: { user_id: 1 }, body: { bio: "Hello" } }), res);
     expect(res.json).toHaveBeenCalledWith({ success: true, message: "Bio updated", user: expect.any(Object) });
@@ -143,10 +155,10 @@ describe("addSkills", () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
   it("adds skills successfully", async () => {
-    mockSql.mockResolvedValueOnce([{ user_id: 1 }]);
-    mockSql.mockResolvedValueOnce([{ skill_id: 1 }]);
-    mockSql.mockResolvedValueOnce([]);
-    mockSql.mockResolvedValueOnce([{ skill_id: 1, name: "ts" }]);
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1 });
+    mockSkillUpsert.mockResolvedValue({ skill_id: 1 });
+    mockUserSkillUpsert.mockResolvedValue({});
+    mockUserSkillFindMany.mockResolvedValueOnce([{ skill: { skill_id: 1, name: "ts" } }]);
     const res = mockRes();
     await MODULES.addSkills(mockReq({ user: { user_id: 1 }, body: { skills: ["TS"] } }), res);
     expect(res.json).toHaveBeenCalledWith({ success: true, message: "Skills added", skills: expect.any(Array) });
@@ -161,8 +173,8 @@ describe("removeSkills", () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
   it("removes and returns remaining", async () => {
-    mockSql.mockResolvedValueOnce([]);
-    mockSql.mockResolvedValueOnce([{ skill_id: 2, name: "js" }]);
+    mockUserSkillDeleteMany.mockResolvedValueOnce({ count: 1 });
+    mockUserSkillFindMany.mockResolvedValueOnce([{ skill: { skill_id: 2, name: "js" } }]);
     const res = mockRes();
     await MODULES.removeSkills(mockReq({ user: { user_id: 1 }, body: { skill_ids: [1] } }), res);
     expect(res.json).toHaveBeenCalledWith({ success: true, message: "Skills removed", skills: expect.any(Array) });
@@ -172,7 +184,7 @@ describe("removeSkills", () => {
 describe("getAllSkills", () => {
   beforeEach(() => { vi.clearAllMocks(); });
   it("returns all skills", async () => {
-    mockSql.mockResolvedValueOnce([{ skill_id: 1, name: "ts" }, { skill_id: 2, name: "js" }]);
+    mockSkillFindMany.mockResolvedValueOnce([{ skill_id: 1, name: "ts" }, { skill_id: 2, name: "js" }]);
     const res = mockRes();
     await MODULES.getAllSkills(mockReq(), res);
     expect(res.json).toHaveBeenCalledWith({ success: true, skills: expect.any(Array) });
