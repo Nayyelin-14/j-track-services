@@ -1,5 +1,5 @@
 import { Response, NextFunction } from "express";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
@@ -28,21 +28,24 @@ export const applyJob = TryCatch(
     const applicant_id = user.user_id;
     const resume = user?.resume;
 
-    const { jobId } = req.body;
-    if (!jobId) {
+    const jobId = Number(req.body.jobId);
+    if (!jobId || isNaN(jobId)) {
       return next(new ErrorHandler(403, "Not Found!!!"));
     }
 
-    const [applicant] = await sql`
-      SELECT email FROM users WHERE user_id = ${applicant_id}
-    `;
+    const applicant = await prisma.user.findFirst({
+      where: { user_id: applicant_id },
+      select: { email: true },
+    });
     if (!applicant) {
       return next(new ErrorHandler(404, "Applicant not found"));
     }
     const applicant_email = applicant.email;
 
-    const [job] = await sql`
-  SELECT is_active FROM jobs WHERE job_id=${jobId}`;
+    const job = await prisma.job.findFirst({
+      where: { job_id: jobId },
+      select: { is_active: true },
+    });
 
     if (!job?.is_active) {
       return next(new ErrorHandler(403, "Not Found!!!"));
@@ -56,25 +59,17 @@ export const applyJob = TryCatch(
 
     let newApplication;
     try {
-      [newApplication] = await sql`
-  INSERT INTO applications (
-    job_id,
-    applicant_id,
-    applicant_email,
-    resume,
-    subscribed
-  )
-  VALUES (
-    ${jobId},
-    ${applicant_id},
-    ${applicant_email},
-    ${resume},
-    ${isSubscribed}
-  )
-  RETURNING *
-`;
+      newApplication = await prisma.application.create({
+        data: {
+          job_id: jobId,
+          applicant_id,
+          applicant_email,
+          subscribed: isSubscribed,
+          ...(resume && { resume }),
+        } as any,
+      });
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (error.code === "P2002") {
         throw new ErrorHandler(409, "You have already applied for this job");
       }
       throw error;
@@ -122,43 +117,55 @@ export const getApplications = TryCatch(
       CACHE_KEYS.applications(applicant_id),
       300,
       async () => {
-        const applications = await sql`
-          SELECT
-            a.application_id,
-            a.status,
-            a.applied_at,
-            a.subscribed,
+        const applications = await prisma.application.findMany({
+          where: { applicant_id },
+          select: {
+            application_id: true,
+            status: true,
+            applied_at: true,
+            subscribed: true,
+            job: {
+              select: {
+                job_id: true,
+                title: true,
+                salary: true,
+                location: true,
+                job_type: true,
+                work_location: true,
+                is_active: true,
+                company: {
+                  select: {
+                    company_id: true,
+                    name: true,
+                    logo: true,
+                  },
+                },
+              },
+            },
+          },
+          orderBy: { applied_at: "desc" },
+        });
 
-            j.job_id,
-            j.title AS job_title,
-            j.salary AS job_salary,
-            j.location AS job_location,
-            j.job_type,
-            j.work_location,
-            j.is_active,
-
-            c.company_id,
-            c.name AS company_name,
-            c.logo AS company_logo
-
-          FROM applications a
-
-          INNER JOIN jobs j
-            ON a.job_id = j.job_id
-
-          INNER JOIN companies c
-            ON j.company_id = c.company_id
-
-          WHERE a.applicant_id = ${applicant_id}
-
-          ORDER BY a.applied_at DESC
-        `;
-
-        if (!applications) {
+        if (applications.length === 0) {
           throw new ErrorHandler(404, "No applications found");
         }
 
-        return applications;
+        return applications.map((a: { application_id: number; status: string; applied_at: Date; subscribed: boolean | null; job: { job_id: number; title: string; salary: unknown; location: string | null; job_type: unknown; work_location: unknown; is_active: boolean | null; company: { company_id: number; name: string; logo: string | null } } }) => ({
+          application_id: a.application_id,
+          status: a.status,
+          applied_at: a.applied_at,
+          subscribed: a.subscribed,
+          job_id: a.job.job_id,
+          job_title: a.job.title,
+          job_salary: a.job.salary,
+          job_location: a.job.location,
+          job_type: a.job.job_type,
+          work_location: a.job.work_location,
+          is_active: a.job.is_active,
+          company_id: a.job.company.company_id,
+          company_name: a.job.company.name,
+          company_logo: a.job.company.logo,
+        }));
       },
     );
 
@@ -191,45 +198,68 @@ export const getApplicationsByRecruiterJob = TryCatch(
       CACHE_KEYS.applicationsByJob(job_id),
       300,
       async () => {
-        const applications = await sql`
-          SELECT
-            a.application_id,
-            a.status,
-            a.applied_at,
-            a.subscribed,
-            a.resume,
-
-            u.user_id,
-            u.name,
-            u.email,
-            u.phone_number,
-            u.bio,
-            u.profile_pic,
-
-            j.job_id,
-            j.title
-
-          FROM applications a
-
-          INNER JOIN users u
-            ON a.applicant_id = u.user_id
-
-          INNER JOIN jobs j
-            ON a.job_id = j.job_id
-            AND j.posted_by_recruiter_id = ${recruiter_id}
-
-          WHERE a.job_id = ${job_id}
-
-          ORDER BY
-            a.subscribed DESC,
-            a.applied_at ASC
-        `;
+        const applications = await prisma.application.findMany({
+          where: {
+            job_id,
+            job: { posted_by_recruiter_id: recruiter_id },
+          },
+          select: {
+            application_id: true,
+            status: true,
+            applied_at: true,
+            subscribed: true,
+            resume: true,
+            applicant_id: true,
+            job: {
+              select: {
+                job_id: true,
+                title: true,
+              },
+            },
+          },
+          orderBy: [
+            { subscribed: "desc" },
+            { applied_at: "asc" },
+          ],
+        });
 
         if (applications.length === 0) {
           throw new ErrorHandler(404, "Job not found or access denied");
         }
 
-        return applications;
+        const userIds = applications.map((a: { applicant_id: number }) => a.applicant_id);
+        const users = await prisma.user.findMany({
+          where: { user_id: { in: userIds } },
+          select: {
+            user_id: true,
+            name: true,
+            email: true,
+            phone_number: true,
+            bio: true,
+            profile_pic: true,
+          },
+        });
+        const usersTyped = users as Array<{ user_id: number; name: string | null; email: string | null; phone_number: string | null; bio: string | null; profile_pic: string | null }>;
+        const userMap = new Map(usersTyped.map((u: { user_id: number; name: string | null; email: string | null; phone_number: string | null; bio: string | null; profile_pic: string | null }) => [u.user_id, u]));
+
+        return applications.map((a: { application_id: number; status: string; applied_at: Date; subscribed: boolean | null; resume: string | null; applicant_id: number; job: { job_id: number; title: string } }) => {
+          const u = userMap.get(a.applicant_id);
+          return {
+            application_id: a.application_id,
+            status: a.status,
+            applied_at: a.applied_at,
+            subscribed: a.subscribed,
+            resume: a.resume,
+            user_id: u?.user_id,
+            name: u?.name,
+            email: u?.email,
+            phone_number: u?.phone_number,
+            bio: u?.bio,
+            profile_pic: u?.profile_pic,
+            job_id: a.job.job_id,
+            title: a.job.title,
+          };
+        });
       },
     );
 
@@ -272,28 +302,43 @@ export const updateJobApplication = TryCatch(
       );
     }
 
-    const [application] = await sql`
-      SELECT
-        a.application_id,
-        a.status          AS current_status,
-        a.applicant_email,
-        u.name            AS applicant_name,
-        j.job_id,
-        j.title           AS job_title,
-        j.is_active,
-        c.name            AS company_name,
-        c.recruiter_id
-      FROM applications a
-      INNER JOIN users u      ON a.applicant_id  = u.user_id
-      INNER JOIN jobs j       ON a.job_id        = j.job_id
-      INNER JOIN companies c  ON j.company_id    = c.company_id
-      WHERE a.application_id = ${application_id}
-      LIMIT 1
-    `;
+    const app = await prisma.application.findFirst({
+      where: { application_id },
+      select: {
+        application_id: true,
+        status: true,
+        applicant_email: true,
+        applicant_id: true,
+        job: {
+          select: {
+            job_id: true,
+            title: true,
+            is_active: true,
+            company: { select: { name: true, recruiter_id: true } },
+          },
+        },
+      },
+    });
 
-    if (!application) {
+    if (!app) {
       return next(new ErrorHandler(404, "Application not found"));
     }
+
+    const applicant = await prisma.user.findFirst({
+      where: { user_id: app.applicant_id },
+      select: { name: true },
+    });
+
+    const application = {
+      ...app,
+      current_status: app.status,
+      applicant_name: applicant?.name ?? "Unknown",
+      job_id: app.job.job_id,
+      job_title: app.job.title,
+      is_active: app.job.is_active,
+      company_name: app.job.company.name,
+      recruiter_id: app.job.company.recruiter_id,
+    };
 
     if (application.recruiter_id !== req.user.user_id) {
       return next(
@@ -331,27 +376,19 @@ export const updateJobApplication = TryCatch(
       );
     }
 
-    const [updated] = await sql`
-      UPDATE applications
-      SET status = ${status as ApplicationStatus}
-      WHERE application_id = ${application_id}
-      RETURNING
-        application_id,
-        job_id,
-        applicant_id,
-        applicant_email,
-        status,
-        applied_at,
-        subscribed
-    `;
-    if (!updated) {
-      return next(
-        new ErrorHandler(
-          409,
-          "Application status is already final or unchanged",
-        ),
-      );
-    }
+    const updated = await prisma.application.update({
+      where: { application_id },
+      data: { status: status as any },
+      select: {
+        application_id: true,
+        job_id: true,
+        applicant_id: true,
+        applicant_email: true,
+        status: true,
+        applied_at: true,
+        subscribed: true,
+      },
+    });
 
     kafka.publish("send-mail", {
       to: application.applicant_email,

@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
@@ -19,37 +19,49 @@ export const getMe = TryCatch(async (req: AuthRequest, res: Response) => {
     CACHE_KEYS.userMe(userData.user_id),
     300,
     async () => {
-      const [user] = await sql`
-        SELECT
-          u.user_id,
-          u.name,
-          u.email,
-          u.role,
-          u.phone_number,
-          u.bio,
-          u.resume,
-          u.profile_pic,
-          u.created_at,
-          u.subscription,
-          COALESCE(
-            JSON_AGG(
-              JSON_BUILD_OBJECT('skill_id', s.skill_id, 'name', s.name)
-            ) FILTER (WHERE s.skill_id IS NOT NULL),
-            '[]'
-          ) AS skills
-        FROM users u
-        LEFT JOIN user_skills us ON u.user_id = us.user_id
-        LEFT JOIN skills s ON us.skill_id = s.skill_id
-        WHERE u.user_id = ${userData.user_id}
-        GROUP BY u.user_id
-        LIMIT 1
-      `;
+      const user = await prisma.user.findFirst({
+        where: { user_id: userData.user_id },
+        select: {
+          user_id: true,
+          name: true,
+          email: true,
+          role: true,
+          phone_number: true,
+          bio: true,
+          resume: true,
+          profile_pic: true,
+          created_at: true,
+          subscription: true,
+          user_skills: {
+            select: {
+              skill: {
+                select: {
+                  skill_id: true,
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      });
 
       if (!user) {
         throw new ErrorHandler(404, "User not found");
       }
 
-      return user;
+      return {
+        user_id: user.user_id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        phone_number: user.phone_number,
+        bio: user.bio,
+        resume: user.resume,
+        profile_pic: user.profile_pic,
+        created_at: user.created_at,
+        subscription: user.subscription,
+        skills: user.user_skills.map((us: { skill: unknown }) => us.skill),
+      };
     },
   );
 
@@ -79,39 +91,49 @@ export const getUserById = TryCatch(async (req: Request, res: Response) => {
     console.error("[Redis] Cache read error (non-fatal):", err);
   }
 
-  const [user] = await sql`
-    SELECT
-      u.user_id,
-      u.name,
-      u.role,
-      u.bio,
-      u.profile_pic,
-      u.created_at,
-      COALESCE(
-        JSON_AGG(
-          JSON_BUILD_OBJECT('skill_id', s.skill_id, 'name', s.name)
-        ) FILTER (WHERE s.skill_id IS NOT NULL),
-        '[]'
-      ) AS skills
-    FROM users u
-    LEFT JOIN user_skills us ON u.user_id = us.user_id
-    LEFT JOIN skills s ON us.skill_id = s.skill_id
-    WHERE u.user_id = ${userId}
-    GROUP BY u.user_id
-    LIMIT 1
-  `;
+  const user = await prisma.user.findFirst({
+    where: { user_id: userId },
+    select: {
+      user_id: true,
+      name: true,
+      role: true,
+      bio: true,
+      profile_pic: true,
+      created_at: true,
+      user_skills: {
+        select: {
+          skill: {
+            select: {
+              skill_id: true,
+              name: true,
+            },
+          },
+        },
+      },
+    },
+  });
 
   if (!user) {
     throw new ErrorHandler(404, "User not found");
   }
 
+  const result = {
+    user_id: user.user_id,
+    name: user.name,
+    role: user.role,
+    bio: user.bio,
+    profile_pic: user.profile_pic,
+    created_at: user.created_at,
+    skills: user.user_skills.map((us) => us.skill),
+  };
+
   try {
-    await redisClient.setEx(cacheKey, 300, JSON.stringify(user));
+    await redisClient.setEx(cacheKey, 300, JSON.stringify(result));
   } catch (err) {
     console.error("[Redis] Cache write error (non-fatal):", err);
   }
 
-  return res.json({ success: true, user });
+  return res.json({ success: true, user: result });
 });
 
 export const updateUser = TryCatch(async (req: AuthRequest, res: Response) => {
@@ -123,9 +145,9 @@ export const updateUser = TryCatch(async (req: AuthRequest, res: Response) => {
 
   const { name, phone_number, bio } = req.body;
 
- if (name === undefined && phone_number === undefined && bio === undefined) {
-   throw new ErrorHandler(400, "Nothing to update");
- }
+  if (name === undefined && phone_number === undefined && bio === undefined) {
+    throw new ErrorHandler(400, "Nothing to update");
+  }
 
   if (name !== undefined) {
     if (typeof name !== "string" || name.trim().length < 2) {
@@ -143,20 +165,30 @@ export const updateUser = TryCatch(async (req: AuthRequest, res: Response) => {
     }
   }
 
-  const [existing] = await sql`
-    SELECT user_id FROM users WHERE user_id = ${userData.user_id} LIMIT 1
-  `;
+  const existing = await prisma.user.findFirst({
+    where: { user_id: userData.user_id },
+    select: { user_id: true },
+  });
   if (!existing) throw new ErrorHandler(404, "User not found");
 
-  const [updated] = await sql`
-    UPDATE users
-    SET
-      name         = COALESCE(${name?.trim() ?? null}, name),
-      phone_number = COALESCE(${phone_number ?? null}, phone_number),
-      bio          = COALESCE(${bio ?? null}, bio)
-    WHERE user_id = ${userData.user_id}
-    RETURNING user_id, name, email, role, phone_number, bio, profile_pic, created_at
-  `;
+  const updated = await prisma.user.update({
+    where: { user_id: userData.user_id },
+    data: {
+      ...(name?.trim() && { name: name.trim() }),
+      ...(phone_number !== undefined && { phone_number }),
+      ...(bio !== undefined && { bio }),
+    },
+    select: {
+      user_id: true,
+      name: true,
+      email: true,
+      role: true,
+      phone_number: true,
+      bio: true,
+      profile_pic: true,
+      created_at: true,
+    },
+  });
 
   await invalidateUserCache(userData.user_id);
 
@@ -188,17 +220,17 @@ export const updateBio = TryCatch(async (req: AuthRequest, res: Response) => {
     throw new ErrorHandler(400, "Bio must be under 2000 characters");
   }
 
-  const [existing] = await sql`
-    SELECT user_id FROM users WHERE user_id = ${userData.user_id} LIMIT 1
-  `;
+  const existing = await prisma.user.findFirst({
+    where: { user_id: userData.user_id },
+    select: { user_id: true },
+  });
   if (!existing) throw new ErrorHandler(404, "User not found");
 
-  const [updated] = await sql`
-    UPDATE users
-    SET bio = ${bio.trim()}
-    WHERE user_id = ${userData.user_id}
-    RETURNING user_id, bio
-  `;
+  const updated = await prisma.user.update({
+    where: { user_id: userData.user_id },
+    data: { bio: bio.trim() },
+    select: { user_id: true, bio: true },
+  });
 
   await invalidateUserCache(userData.user_id);
 

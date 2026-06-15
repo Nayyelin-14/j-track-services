@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const mockSql = vi.fn();
+const mockUserFindFirst = vi.fn();
+const mockJobFindFirst = vi.fn();
+const mockPrisma = {
+  user: { findFirst: mockUserFindFirst },
+  job: { findFirst: mockJobFindFirst },
+};
 
-vi.mock("@jtrack/shared/db", () => ({ sql: mockSql }));
+vi.mock("@jtrack/shared/db", () => ({ prisma: mockPrisma }));
 vi.mock("@jtrack/shared/errorHandler", () => ({
   ErrorHandler: class extends Error {
     statusCode: number;
@@ -56,14 +61,14 @@ describe("analyzeJobMatch", () => {
   });
 
   it("throws 404 if user not found", async () => {
-    mockSql.mockResolvedValueOnce([]);
+    mockUserFindFirst.mockResolvedValueOnce(null);
     const res = mockRes();
     await MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 999 }, params: { jobId: "1" } }), res);
     expect(res.status).toHaveBeenCalledWith(404);
   });
 
   it("throws 400 if user has no resume", async () => {
-    mockSql.mockResolvedValueOnce([{ resume: null }]);
+    mockUserFindFirst.mockResolvedValueOnce({ resume: null });
     const res = mockRes();
     await MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 1 }, params: { jobId: "1" } }), res);
     expect(res.status).toHaveBeenCalledWith(400);
@@ -71,8 +76,8 @@ describe("analyzeJobMatch", () => {
   });
 
   it("throws 404 if job not found", async () => {
-    mockSql.mockResolvedValueOnce([{ resume: "https://cloudinary.com/r.pdf" }]);
-    mockSql.mockResolvedValueOnce([]);
+    mockUserFindFirst.mockResolvedValueOnce({ resume: "https://cloudinary.com/r.pdf" });
+    mockJobFindFirst.mockResolvedValueOnce(null);
     const res = mockRes();
     await MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 1 }, params: { jobId: "999" } }), res);
     expect(res.status).toHaveBeenCalledWith(404);

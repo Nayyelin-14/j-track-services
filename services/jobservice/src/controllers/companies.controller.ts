@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import axios from "axios";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
@@ -41,17 +41,16 @@ export const createCompany = TryCatch(
       return next(new ErrorHandler(400, "Website must be a valid URL"));
     }
 
-    const [existing] = await sql`
-      SELECT company_id FROM companies
-      WHERE LOWER(name) = LOWER(${name})
-      LIMIT 1
-    `;
+    const existing = await prisma.company.findFirst({
+      where: { name: { equals: name, mode: "insensitive" } },
+      select: { company_id: true },
+    });
     if (existing) {
       return next(new ErrorHandler(409, "Company name already taken"));
     }
 
-    let logo = null;
-    let logo_public_id = null;
+    let logo: string | null = null;
+    let logo_public_id: string | null = null;
 
     if (req.file) {
       const allowed = ["image/jpeg", "image/png", "image/webp"];
@@ -80,15 +79,24 @@ export const createCompany = TryCatch(
       logo_public_id = uploadRes.data.public_id;
     }
 
-    const [company] = await sql`
-      INSERT INTO companies
-        (name, description, website, logo, logo_public_id, recruiter_id)
-      VALUES
-        (${name}, ${description}, ${website},
-         ${logo}, ${logo_public_id}, ${req.user.user_id})
-      RETURNING
-        company_id, name, description, website, logo, created_at
-    `;
+    const company = await prisma.company.create({
+      data: {
+        name,
+        description,
+        website,
+        logo,
+        logo_public_id,
+        recruiter_id: req.user.user_id,
+      },
+      select: {
+        company_id: true,
+        name: true,
+        description: true,
+        website: true,
+        logo: true,
+        created_at: true,
+      },
+    });
 
     await invalidateCompaniesCache();
 
@@ -117,12 +125,10 @@ export const deleteCompany = TryCatch(
       return next(new ErrorHandler(400, "Invalid company ID"));
     }
 
-    const [company] = await sql`
-      SELECT company_id, recruiter_id, logo_public_id
-      FROM companies
-      WHERE company_id = ${companyId}
-      LIMIT 1
-    `;
+    const company = await prisma.company.findFirst({
+      where: { company_id: companyId },
+      select: { company_id: true, recruiter_id: true, logo_public_id: true },
+    });
     if (!company) {
       return next(new ErrorHandler(404, "Company not found"));
     }
@@ -143,10 +149,9 @@ export const deleteCompany = TryCatch(
       }
     }
 
-    await sql`
-      DELETE FROM companies
-      WHERE company_id = ${companyId}
-    `;
+    await prisma.company.delete({
+      where: { company_id: companyId },
+    });
 
     await invalidateCompaniesCache(companyId);
 
@@ -184,18 +189,23 @@ export const getAllCompanies = TryCatch(
       console.warn("[Redis] Cache read error (non-fatal):", err);
     }
 
-    const [companies, [countResult]] = await Promise.all([
-      sql`
-        SELECT
-          company_id, name, description, website, location, logo, created_at
-        FROM companies
-        ORDER BY created_at DESC
-        LIMIT ${limit} OFFSET ${offset}
-      `,
-      sql`SELECT COUNT(*)::int AS total FROM companies`,
+    const [companies, total] = await Promise.all([
+      prisma.company.findMany({
+        select: {
+          company_id: true,
+          name: true,
+          description: true,
+          website: true,
+          location: true,
+          logo: true,
+          created_at: true,
+        },
+        orderBy: { created_at: "desc" },
+        skip: offset,
+        take: limit,
+      }),
+      prisma.company.count(),
     ]);
-
-    const total = countResult?.total ?? 0;
 
     try {
       await redisClient.setEx(
@@ -227,19 +237,18 @@ export const getCompanyById = TryCatch(
       CACHE_KEYS.company(company_id),
       300,
       async () => {
-        const [company] = await sql`
-          SELECT
-            company_id,
-            name,
-            description,
-            website,
-            location,
-            logo,
-            created_at
-          FROM companies
-          WHERE company_id = ${company_id}
-          LIMIT 1
-        `;
+        const company = await prisma.company.findFirst({
+          where: { company_id },
+          select: {
+            company_id: true,
+            name: true,
+            description: true,
+            website: true,
+            location: true,
+            logo: true,
+            created_at: true,
+          },
+        });
 
         if (!company) {
           throw new ErrorHandler(404, "Company not found");
@@ -288,21 +297,11 @@ export const getCompanyDetail = TryCatch(
       console.error("[Redis] Cache read error (non-fatal):", err);
     }
 
-    const [company] = await sql`
+    const [company] = await prisma.$queryRaw<any[]>`
       SELECT
-        c.company_id,
-        c.name,
-        c.description,
-        c.website,
-        c.logo,
-        c.logo_public_id,
-        c.created_at,
-        c.recruiter_id,
-
-        u.user_id,
-        u.name AS recruiter_name,
-        u.email AS recruiter_email,
-
+        c.company_id, c.name, c.description, c.website, c.logo,
+        c.logo_public_id, c.created_at, c.recruiter_id,
+        u.user_id, u.name AS recruiter_name, u.email AS recruiter_email,
         COALESCE(
           JSON_AGG(
             CASE
@@ -324,21 +323,11 @@ export const getCompanyDetail = TryCatch(
           ) FILTER (WHERE j.job_id IS NOT NULL),
           '[]'
         ) AS jobs
-
       FROM companies c
-
-      INNER JOIN users u
-        ON c.recruiter_id = u.user_id
-
-      LEFT JOIN jobs j
-        ON c.company_id = j.company_id
-
+      INNER JOIN users u ON c.recruiter_id = u.user_id
+      LEFT JOIN jobs j ON c.company_id = j.company_id
       WHERE c.company_id = ${company_id}
-
-      GROUP BY
-        c.company_id,
-        u.user_id
-
+      GROUP BY c.company_id, u.user_id
       LIMIT 1
     `;
 
@@ -362,13 +351,11 @@ export const getCompanyDetail = TryCatch(
         logo: company.logo,
         logo_public_id: company.logo_public_id,
         created_at: company.created_at,
-
         recruiter: {
           user_id: company.user_id,
           name: company.recruiter_name,
           email: company.recruiter_email,
         },
-
         jobs: company.jobs,
       },
     });
@@ -389,13 +376,11 @@ export const getCompanyDetail = TryCatch(
         logo: company.logo,
         logo_public_id: company.logo_public_id,
         created_at: company.created_at,
-
         recruiter: {
           user_id: company.user_id,
           name: company.recruiter_name,
           email: company.recruiter_email,
         },
-
         jobs: company.jobs,
       },
     });

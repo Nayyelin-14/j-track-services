@@ -1,11 +1,12 @@
 import "dotenv/config";
 import app from "./app.js";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { redisClient } from "./redis.js";
 import { kafka } from "./kafka.js";
 import { ensureTopic } from "@jtrack/shared/kafka/topic";
 import type { KafkaHealth } from "@jtrack/shared/kafka/types";
 import { createAnalyticsConsumer } from "./analytics/consumer.js";
+import { initDB } from "./init.js";
 
 async function connectRedis() {
   const maxRetries = 5;
@@ -22,93 +23,9 @@ async function connectRedis() {
   }
 }
 
-async function initDB() {
-  await sql`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'job_type') THEN
-        CREATE TYPE job_type AS ENUM ('Full-time', 'Part-time', 'Contract', 'Internship');
-      END IF;
-
-      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'work_location') THEN
-        CREATE TYPE work_location AS ENUM ('On-site', 'Remote', 'Hybrid');
-      END IF;
-
-      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'application_status') THEN
-        CREATE TYPE application_status AS ENUM ('Applied', 'Submitted', 'Rejected', 'Hired');
-      END IF;
-    END $$;
-  `;
-
-  await sql`ALTER TYPE application_status ADD VALUE IF NOT EXISTS 'Applied'`;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS companies (
-      company_id     SERIAL PRIMARY KEY,
-      name           VARCHAR(255) NOT NULL UNIQUE,
-      description    TEXT NOT NULL,
-      website        VARCHAR(255) NOT NULL,
-      location       VARCHAR(255),
-      logo           VARCHAR(255),
-      logo_public_id VARCHAR(255),
-      recruiter_id   INTEGER NOT NULL,
-      created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `;
-  await sql`
-    ALTER TABLE companies
-    ALTER COLUMN logo DROP NOT NULL,
-    ALTER COLUMN logo_public_id DROP NOT NULL
-  `;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS jobs (
-      job_id                 SERIAL PRIMARY KEY,
-      title                  VARCHAR(255) NOT NULL,
-      description            TEXT NOT NULL,
-      salary                 NUMERIC(10,2),
-      location               VARCHAR(255),
-      job_type               job_type NOT NULL,
-      openings               NUMERIC(3,1) NOT NULL,
-      role                   VARCHAR(255) NOT NULL,
-      work_location          work_location NOT NULL,
-      company_id             INTEGER NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
-      posted_by_recruiter_id INTEGER NOT NULL,
-      created_at             TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      is_active              BOOLEAN DEFAULT true
-    )
-  `;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS applications (
-      application_id  SERIAL PRIMARY KEY,
-      job_id          INTEGER NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
-      applicant_id    INTEGER NOT NULL,
-      applicant_email VARCHAR(255) NOT NULL,
-      status          application_status NOT NULL DEFAULT 'Applied',
-      resume          VARCHAR(255),
-      applied_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      subscribed      BOOLEAN,
-      UNIQUE (job_id, applicant_id)
-    )
-  `;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS job_analytics (
-      job_id          INTEGER NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
-      date            DATE NOT NULL DEFAULT CURRENT_DATE,
-      views           INTEGER NOT NULL DEFAULT 0,
-      applications    INTEGER NOT NULL DEFAULT 0,
-      status_changes  INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (job_id, date)
-    )
-  `;
-
-  console.log("[DB] Initialized");
-}
-
 app.get("/health", async (_req, res) => {
   const kafkaHealth: KafkaHealth = await kafka.healthCheck();
-  const dbOk = await sql`SELECT 1`.catch(() => null);
+  const dbOk = await prisma.$queryRaw`SELECT 1`.catch(() => null);
   const redisOk = redisClient.isOpen;
 
   const status = kafkaHealth.connected && dbOk && redisOk ? "healthy" : "degraded";

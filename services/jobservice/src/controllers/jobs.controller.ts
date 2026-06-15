@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
@@ -17,6 +17,8 @@ import {
   WorkLocation,
   JOBS_LIST_VERSION_KEY,
   getListVersion,
+  mapJobType,
+  mapWorkLocation,
 } from "./utils.js";
 
 export const createJob = TryCatch(
@@ -77,12 +79,10 @@ export const createJob = TryCatch(
 
     const company_id = sanitizePositiveInt(req.body.company_id, "Company ID");
 
-    const [company] = await sql`
-      SELECT company_id, recruiter_id
-      FROM companies
-      WHERE company_id  = ${company_id}
-      LIMIT 1
-    `;
+    const company = await prisma.company.findFirst({
+      where: { company_id },
+      select: { company_id: true, recruiter_id: true },
+    });
     if (!company) {
       return next(new ErrorHandler(404, "Company not found"));
     }
@@ -90,44 +90,34 @@ export const createJob = TryCatch(
       return next(new ErrorHandler(403, "You do not own this company"));
     }
 
-    const [job] = await sql`
-      INSERT INTO jobs (
+    const job = await prisma.job.create({
+      data: {
         title,
         description,
-        salary,
         location,
-        job_type,
+        job_type: mapJobType(job_type) as any,
         openings,
         role,
-        work_location,
+        work_location: mapWorkLocation(work_location) as any,
         company_id,
-        posted_by_recruiter_id
-      ) VALUES (
-        ${title},
-        ${description},
-        ${salary},
-        ${location},
-        ${job_type},
-        ${openings},
-        ${role},
-        ${work_location},
-        ${company_id},
-        ${req.user.user_id}
-      )
-      RETURNING
-        job_id,
-        title,
-        description,
-        salary,
-        location,
-        job_type,
-        openings,
-        role,
-        work_location,
-        company_id,
-        is_active,
-        created_at
-    `;
+        posted_by_recruiter_id: req.user.user_id,
+        ...(salary !== null && { salary }),
+      } as any,
+      select: {
+        job_id: true,
+        title: true,
+        description: true,
+        salary: true,
+        location: true,
+        job_type: true,
+        openings: true,
+        role: true,
+        work_location: true,
+        company_id: true,
+        is_active: true,
+        created_at: true,
+      },
+    });
     await invalidateJobsCache();
     await invalidateCompaniesCache(company_id);
 
@@ -151,30 +141,26 @@ export const deleteJob = TryCatch(
 
     const job_id = sanitizePositiveInt(req.params.job_id, "Job ID");
 
-    const [job] = await sql`
-      SELECT
-        j.job_id,
-        j.company_id,
-        c.recruiter_id
-      FROM jobs j
-      INNER JOIN companies c
-        ON j.company_id = c.company_id
-      WHERE j.job_id = ${job_id}
-      LIMIT 1
-    `;
+    const job = await prisma.job.findFirst({
+      where: { job_id },
+      select: {
+        job_id: true,
+        company_id: true,
+        company: { select: { recruiter_id: true } },
+      },
+    });
 
     if (!job) {
       return next(new ErrorHandler(404, "Job not found"));
     }
 
-    if (job.recruiter_id !== req.user.user_id) {
+    if (job.company.recruiter_id !== req.user.user_id) {
       return next(new ErrorHandler(403, "You are not authorized to delete this job"));
     }
 
-    await sql`
-      DELETE FROM jobs
-      WHERE job_id = ${job_id}
-    `;
+    await prisma.job.delete({
+      where: { job_id },
+    });
     await invalidateJobsCache(job_id);
     await invalidateCompaniesCache(job.company_id);
     return res.status(200).json({
@@ -196,51 +182,37 @@ export const updateJob = TryCatch(
 
     const job_id = sanitizePositiveInt(req.params.job_id, "Job ID");
 
-    const [existingJob] = await sql`
-      SELECT
-        j.*,
-        c.recruiter_id
-      FROM jobs j
-      INNER JOIN companies c
-        ON j.company_id = c.company_id
-      WHERE j.job_id = ${job_id}
-      LIMIT 1
-    `;
+    const existingJob = await prisma.job.findFirst({
+      where: { job_id },
+      include: { company: { select: { recruiter_id: true } } },
+    });
 
     if (!existingJob) {
       return next(new ErrorHandler(404, "Job not found"));
     }
 
-    if (existingJob.recruiter_id !== req.user.user_id) {
+    if (existingJob.company.recruiter_id !== req.user.user_id) {
       return next(
         new ErrorHandler(403, "You can only update jobs from your own company"),
       );
     }
 
-    let title = existingJob.title;
-    let description = existingJob.description;
-    let salary = existingJob.salary;
-    let location = existingJob.location;
-    let job_type = existingJob.job_type;
-    let openings = existingJob.openings;
-    let role = existingJob.role;
-    let work_location = existingJob.work_location;
-    let is_active = existingJob.is_active;
+    const data: any = {};
 
     if (req.body.title !== undefined) {
-      title = sanitize(req.body.title, "Title", 255);
+      data.title = sanitize(req.body.title, "Title", 255);
     }
 
     if (req.body.description !== undefined) {
-      description = sanitize(req.body.description, "Description", 5000);
+      data.description = sanitize(req.body.description, "Description", 5000);
     }
 
     if (req.body.location !== undefined) {
-      location = sanitize(req.body.location, "Location", 255);
+      data.location = sanitize(req.body.location, "Location", 255);
     }
 
     if (req.body.role !== undefined) {
-      role = sanitize(req.body.role, "Role", 255);
+      data.role = sanitize(req.body.role, "Role", 255);
     }
 
     if (req.body.job_type !== undefined) {
@@ -252,7 +224,7 @@ export const updateJob = TryCatch(
           ),
         );
       }
-      job_type = req.body.job_type;
+      data.job_type = mapJobType(req.body.job_type);
     }
 
     if (req.body.work_location !== undefined) {
@@ -264,19 +236,20 @@ export const updateJob = TryCatch(
           ),
         );
       }
-      work_location = req.body.work_location;
+      data.work_location = mapWorkLocation(req.body.work_location);
     }
 
     if (req.body.openings !== undefined) {
-      openings = sanitizePositiveInt(req.body.openings, "Openings");
+      const openings = sanitizePositiveInt(req.body.openings, "Openings");
       if (openings > 999) {
         return next(new ErrorHandler(400, "Openings cannot exceed 999"));
       }
+      data.openings = openings;
     }
 
     if (req.body.salary !== undefined) {
       if (req.body.salary === "" || req.body.salary === null) {
-        salary = null;
+        data.salary = null;
       } else {
         const parsed = parseFloat(req.body.salary);
         if (isNaN(parsed) || parsed < 0) {
@@ -287,7 +260,7 @@ export const updateJob = TryCatch(
         if (parsed > 99999999.99) {
           return next(new ErrorHandler(400, "Salary value is too large"));
         }
-        salary = parsed;
+        data.salary = parsed;
       }
     }
 
@@ -295,36 +268,27 @@ export const updateJob = TryCatch(
       if (typeof req.body.is_active !== "boolean") {
         return next(new ErrorHandler(400, "is_active must be true or false"));
       }
-      is_active = req.body.is_active;
+      data.is_active = req.body.is_active;
     }
 
-    const [updatedJob] = await sql`
-      UPDATE jobs
-      SET
-        title = ${title},
-        description = ${description},
-        salary = ${salary},
-        location = ${location},
-        job_type = ${job_type},
-        openings = ${openings},
-        role = ${role},
-        work_location = ${work_location},
-        is_active = ${is_active}
-      WHERE job_id = ${job_id}
-      RETURNING
-        job_id,
-        title,
-        description,
-        salary,
-        location,
-        job_type,
-        openings,
-        role,
-        work_location,
-        company_id,
-        is_active,
-        created_at
-    `;
+    const updatedJob = await prisma.job.update({
+      where: { job_id },
+      data,
+      select: {
+        job_id: true,
+        title: true,
+        description: true,
+        salary: true,
+        location: true,
+        job_type: true,
+        openings: true,
+        role: true,
+        work_location: true,
+        company_id: true,
+        is_active: true,
+        created_at: true,
+      },
+    });
     await invalidateJobsCache(job_id);
     await invalidateCompaniesCache(existingJob.company_id);
 
@@ -347,26 +311,6 @@ export const getAllActiveJobs = TryCatch(
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
     const offset = (page - 1) * limit;
 
-    const filters: string[] = [];
-    const params: unknown[] = [];
-    let paramIdx = 0;
-
-    if (title) {
-      paramIdx++;
-      filters.push(`j.title ILIKE $${paramIdx}`);
-      params.push(`%${title}%`);
-    }
-
-    if (location) {
-      paramIdx++;
-      filters.push(`j.location ILIKE $${paramIdx}`);
-      params.push(`%${location}%`);
-    }
-
-    const whereClause = filters.length > 0
-      ? `WHERE j.is_active = true AND ${filters.join(" AND ")}`
-      : `WHERE j.is_active = true`;
-
     const version = await getListVersion(JOBS_LIST_VERSION_KEY);
     const cacheKey = `jobs:active:v${version};page=${page};limit=${limit};title=${title ?? ""};location=${location ?? ""}`;
 
@@ -388,32 +332,67 @@ export const getAllActiveJobs = TryCatch(
       console.warn("[Redis] Cache read error (non-fatal):", err);
     }
 
-    const countQuery = sql.query(
-      `SELECT COUNT(*)::int AS total FROM jobs j ${whereClause}`,
-      params,
-    );
-    const dataQuery = sql.query(
-      `SELECT
-        j.job_id, j.title, j.description, j.salary, j.location,
-        j.job_type, j.role, j.work_location, j.openings, j.created_at,
-        c.name AS company_name, c.logo AS company_logo, c.company_id
-      FROM jobs j
-      JOIN companies c ON j.company_id = c.company_id
-      ${whereClause}
-      ORDER BY j.created_at DESC
-      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-      [...params, limit, offset],
-    );
+    const titleFilter = title ? `%${title}%` : null;
+    const locationFilter = location ? `%${location}%` : null;
 
-    const [[countResult], jobs] = await Promise.all([countQuery, dataQuery]);
+    const where: any = { is_active: true };
+    if (titleFilter) {
+      where.title = { contains: title, mode: "insensitive" };
+    }
+    if (locationFilter) {
+      where.location = { contains: location, mode: "insensitive" };
+    }
 
-    const total = countResult?.total ?? 0;
+    const [jobs, totalResult] = await Promise.all([
+      prisma.job.findMany({
+        where,
+        select: {
+          job_id: true,
+          title: true,
+          description: true,
+          salary: true,
+          location: true,
+          job_type: true,
+          role: true,
+          work_location: true,
+          openings: true,
+          created_at: true,
+          company: {
+            select: {
+              company_id: true,
+              name: true,
+              logo: true,
+            },
+          },
+        },
+        orderBy: { created_at: "desc" },
+        skip: offset,
+        take: limit,
+      }),
+      prisma.job.count({ where }),
+    ]);
+
+    const mappedJobs = jobs.map((j: { job_id: number; title: string; description: string; salary: unknown; location: string | null; job_type: unknown; role: string; work_location: unknown; openings: unknown; created_at: Date; company: { company_id: number; name: string; logo: string | null } }) => ({
+      job_id: j.job_id,
+      title: j.title,
+      description: j.description,
+      salary: j.salary,
+      location: j.location,
+      job_type: j.job_type,
+      role: j.role,
+      work_location: j.work_location,
+      openings: j.openings,
+      created_at: j.created_at,
+      company_name: j.company.name,
+      company_logo: j.company.logo,
+      company_id: j.company.company_id,
+    }));
 
     try {
       await redisClient.setEx(
         cacheKey,
         60,
-        JSON.stringify({ jobs, total }),
+        JSON.stringify({ jobs: mappedJobs, total: totalResult }),
       );
     } catch (err) {
       console.warn("[Redis] Cache write error (non-fatal):", err);
@@ -421,11 +400,11 @@ export const getAllActiveJobs = TryCatch(
 
     return res.status(200).json({
       success: true,
-      count: jobs.length,
-      total,
+      count: mappedJobs.length,
+      total: totalResult,
       page,
-      totalPages: Math.ceil(total / limit),
-      jobs,
+      totalPages: Math.ceil(totalResult / limit),
+      jobs: mappedJobs,
     });
   },
 );
@@ -453,44 +432,48 @@ export const getJobById = TryCatch(
       console.error("[Redis] Cache read error (non-fatal):", err);
     }
 
-    const [job] = await sql`
-      SELECT
-        j.job_id,
-        j.title,
-        j.description,
-        j.salary,
-        j.location,
-        j.job_type,
-        j.role,
-        j.work_location,
-        j.openings,
-        j.is_active,
-        j.created_at,
+    const [jobResult, totalApplications] = await Promise.all([
+      prisma.job.findFirst({
+        where: { job_id },
+        select: {
+          job_id: true,
+          title: true,
+          description: true,
+          salary: true,
+          location: true,
+          job_type: true,
+          role: true,
+          work_location: true,
+          openings: true,
+          is_active: true,
+          created_at: true,
+          company: {
+            select: {
+              company_id: true,
+              name: true,
+              description: true,
+              website: true,
+              logo: true,
+            },
+          },
+        },
+      }),
+      prisma.application.count({ where: { job_id } }),
+    ]);
 
-        c.company_id,
-        c.name         AS company_name,
-        c.description  AS company_description,
-        c.website      AS company_website,
-        c.logo         AS company_logo,
-
-        COUNT(a.application_id) AS total_applications
-
-      FROM jobs j
-      JOIN companies c
-        ON j.company_id = c.company_id
-      LEFT JOIN applications a
-        ON j.job_id = a.job_id
-
-      WHERE j.job_id = ${job_id}
-
-      GROUP BY
-        j.job_id,
-        c.company_id
-    `;
-
-    if (!job) {
+    if (!jobResult) {
       return next(new ErrorHandler(404, "Job not found"));
     }
+
+    const job = {
+      ...jobResult,
+      company_id: jobResult.company.company_id,
+      company_name: jobResult.company.name,
+      company_description: jobResult.company.description,
+      company_website: jobResult.company.website,
+      company_logo: jobResult.company.logo,
+      total_applications: totalApplications,
+    };
 
     try {
       await redisClient.setEx(cacheKey, 600, JSON.stringify(job));

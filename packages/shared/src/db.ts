@@ -1,32 +1,12 @@
-import { Pool } from "pg";
+import { PrismaClient } from "@prisma/client";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const dbUrl = process.env.DB_URL;
-
-if (!dbUrl) {
+if (!process.env.DB_URL) {
   throw new Error("DB_URL is not defined in environment variables");
 }
 
-const pool = new Pool({ connectionString: dbUrl });
+const prisma = new PrismaClient();
 
-function sql(
-  strings: TemplateStringsArray | string,
-  ...values: unknown[]
-) {
-  if (typeof strings === "string") {
-    return pool.query(strings, values as any[]).then((r) => r.rows);
-  }
-  let text = "";
-  (strings as TemplateStringsArray).forEach((str, i) => {
-    text += str;
-    if (i < values.length) text += `$${i + 1}`;
-  });
-  return pool.query(text, values as any[]).then((r) => r.rows);
-}
-
-sql.query = (text: string, params?: unknown[]) =>
-  pool.query(text, params as any[]).then((r) => r.rows);
-
-export { sql };
+export { prisma };

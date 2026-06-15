@@ -1,4 +1,4 @@
-export { sql } from "./db";
+export { prisma } from "./db";
 export { signAccessToken, signRefreshToken, signResetToken } from "./token";
 export { accessCookieOptions, refreshCookieOptions } from "./cookies";
 export { getBuffer } from "./buffer";

@@ -1,9 +1,10 @@
 import "dotenv/config";
 import app from "./app.js";
-import { sql } from "@jtrack/shared/db";
+import { prisma } from "@jtrack/shared/db";
 import { redisClient } from "./redis.js";
 import { kafka } from "./kafka.js";
 import { ensureTopic } from "@jtrack/shared/kafka/topic";
+import { initDB } from "./init.js";
 
 async function connectRedis() {
   const maxRetries = 5;
@@ -23,65 +24,9 @@ async function connectRedis() {
   }
 }
 
-async function initDB() {
-  await sql`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
-        CREATE TYPE user_role AS ENUM ('jobseeker', 'recruiter');
-      END IF;
-    END
-    $$;
-  `;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS users (
-      user_id SERIAL PRIMARY KEY,
-      name VARCHAR(255) NOT NULL,
-      email VARCHAR(255) NOT NULL UNIQUE,
-      password VARCHAR(255) NOT NULL,
-      phone_number VARCHAR(20) NOT NULL,
-      role user_role NOT NULL,
-      bio TEXT,
-      resume VARCHAR(255),
-      refresh_token TEXT,
-      resume_public_id VARCHAR(255),
-      profile_pic VARCHAR(255),
-      profile_pic_public_id VARCHAR(255),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      subscription TIMESTAMPTZ
-    );
-  `;
-
-  await sql`
-    ALTER TABLE users
-    DROP COLUMN IF EXISTS reset_token,
-    DROP COLUMN IF EXISTS reset_token_expires,
-    DROP COLUMN IF EXISTS reset_token_attempts,
-    DROP COLUMN IF EXISTS reset_token_locked_until;
-  `;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS skills (
-      skill_id SERIAL PRIMARY KEY,
-      name VARCHAR(100) NOT NULL UNIQUE
-    );
-  `;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS user_skills (
-      user_id INTEGER REFERENCES users(user_id) ON DELETE CASCADE,
-      skill_id INTEGER REFERENCES skills(skill_id) ON DELETE CASCADE,
-      PRIMARY KEY (user_id, skill_id)
-    );
-  `;
-
-  console.log("[DB] Initialized");
-}
-
 app.get("/health", async (_req, res) => {
   const health = await kafka.healthCheck();
-  const dbOk = await sql`SELECT 1`.catch(() => null);
+  const dbOk = await prisma.$queryRaw`SELECT 1`.catch(() => null);
   const redisOk = redisClient.isOpen;
 
   const status = health.connected && dbOk && redisOk ? "healthy" : "degraded";

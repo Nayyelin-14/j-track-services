@@ -1,8 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import axios from "axios";
 
-const mockSqlQuery = vi.fn();
-const mockSql = Object.assign(vi.fn(), { query: mockSqlQuery });
+const mockCompanyFindFirst = vi.fn();
+const mockCompanyCreate = vi.fn();
+const mockCompanyFindMany = vi.fn();
+const mockCompanyCount = vi.fn();
+const mockJobFindFirst = vi.fn();
+const mockJobFindMany = vi.fn();
+const mockJobCount = vi.fn();
+const mockJobCreate = vi.fn();
+const mockApplicationCreate = vi.fn();
+const mockApplicationFindMany = vi.fn();
+const mockUserFindFirst = vi.fn();
+const mockPrisma = {
+  company: { findFirst: mockCompanyFindFirst, create: mockCompanyCreate, findMany: mockCompanyFindMany, count: mockCompanyCount },
+  job: { findFirst: mockJobFindFirst, findMany: mockJobFindMany, count: mockJobCount, create: mockJobCreate },
+  application: { create: mockApplicationCreate, findMany: mockApplicationFindMany },
+  user: { findFirst: mockUserFindFirst },
+};
 const mockRedisGet = vi.fn();
 const mockRedisDel = vi.fn();
 const mockRedisKeys = vi.fn();
@@ -11,7 +26,7 @@ const mockRedisIncr = vi.fn(() => Promise.resolve(1));
 const mockKafkaPublish = vi.fn(() => Promise.resolve());
 const mockGetBuffer = vi.fn((f: any) => ({ content: f?.buffer ?? "datauri" }));
 
-vi.mock("@jtrack/shared/db", () => ({ sql: mockSql }));
+vi.mock("@jtrack/shared/db", () => ({ prisma: mockPrisma }));
 vi.mock("@jtrack/shared/errorHandler", () => ({
   ErrorHandler: class extends Error {
     statusCode: number;
@@ -86,8 +101,8 @@ describe("createCompany", () => {
     );
   });
   it("creates company without logo file", async () => {
-    mockSql.mockResolvedValueOnce([]); // no duplicate
-    mockSql.mockResolvedValueOnce([{ company_id: 1 }]);
+    mockCompanyFindFirst.mockResolvedValueOnce(null);
+    mockCompanyCreate.mockResolvedValueOnce({ company_id: 1, name: "Acme", description: "Test", website: "https://acme.com", created_at: new Date() });
     const next = mockNext();
     const res = mockRes();
     await MODULES.createCompany(
@@ -120,8 +135,8 @@ describe("getAllCompanies", () => {
   it("fetches from db on cache miss", async () => {
     mockRedisGet.mockResolvedValueOnce("1");
     mockRedisGet.mockResolvedValueOnce(null);
-    mockSql.mockResolvedValueOnce([{ company_id: 1, name: "Acme" }]);
-    mockSql.mockResolvedValueOnce([{ total: 1 }]);
+    mockCompanyFindMany.mockResolvedValueOnce([{ company_id: 1, name: "Acme", description: "Test", website: "https://acme.com", location: null, logo: null, created_at: new Date() }]);
+    mockCompanyCount.mockResolvedValueOnce(1);
     const res = mockRes();
     await MODULES.getAllCompanies(mockReq(), res);
     expect(res.json).toHaveBeenCalledWith(
@@ -135,7 +150,7 @@ describe("getCompanyById", () => {
     vi.clearAllMocks();
   });
   it("throws 404 if not found", async () => {
-    mockSql.mockResolvedValueOnce([]);
+    mockCompanyFindFirst.mockResolvedValueOnce(null);
     const next = mockNext();
     const res = mockRes();
     await MODULES.getCompanyById(
@@ -149,7 +164,7 @@ describe("getCompanyById", () => {
     );
   });
   it("returns company", async () => {
-    mockSql.mockResolvedValueOnce([{ company_id: 1, name: "Acme" }]);
+    mockCompanyFindFirst.mockResolvedValueOnce({ company_id: 1, name: "Acme", description: "Test", website: "https://acme.com", location: null, logo: null, created_at: new Date() });
     const res = mockRes();
     await MODULES.getCompanyById(
       mockReq({ params: { company_id: "1" } }),
@@ -209,11 +224,11 @@ describe("applyJob", () => {
     );
   });
   it("applies successfully", async () => {
-    mockSql.mockResolvedValueOnce([{ email: "a@b.com" }]);
-    mockSql.mockResolvedValueOnce([{ is_active: true }]);
-    mockSql.mockResolvedValueOnce([
-      { application_id: 1, job_id: 1, applicant_id: 1, status: "Submitted" },
-    ]);
+    mockUserFindFirst.mockResolvedValueOnce({ email: "a@b.com" });
+    mockJobFindFirst.mockResolvedValueOnce({ is_active: true });
+    mockApplicationCreate.mockResolvedValueOnce(
+      { application_id: 1, job_id: 1, applicant_id: 1, status: "Submitted", subscribed: false },
+    );
     const next = mockNext();
     const res = mockRes();
     await MODULES.applyJob(
@@ -249,7 +264,7 @@ describe("getApplications", () => {
     );
   });
   it("returns applications for jobseeker", async () => {
-    mockSql.mockResolvedValueOnce([{ application_id: 1, status: "Submitted" }]);
+    mockApplicationFindMany.mockResolvedValueOnce([{ application_id: 1, status: "Submitted", applied_at: new Date(), subscribed: null, job: { job_id: 1, title: "Engineer", salary: null, location: null, job_type: "Full_time", work_location: "Remote", is_active: true, company: { company_id: 1, name: "Acme", logo: null } } }]);
     const res = mockRes();
     await MODULES.getApplications(
       mockReq({ user: { role: "jobseeker", user_id: 1 } }),
@@ -280,8 +295,8 @@ describe("getAllActiveJobs", () => {
   it("fetches from db on cache miss", async () => {
     mockRedisGet.mockResolvedValueOnce("1");
     mockRedisGet.mockResolvedValueOnce(null);
-    mockSqlQuery.mockResolvedValueOnce([{ total: 1 }]);
-    mockSqlQuery.mockResolvedValueOnce([{ job_id: 1, title: "Engineer" }]);
+    mockJobCount.mockResolvedValueOnce(1);
+    mockJobFindMany.mockResolvedValueOnce([{ job_id: 1, title: "Engineer", description: "Test", salary: null, location: null, job_type: "Full_time", role: "Dev", work_location: "Remote", openings: 1, created_at: new Date(), company: { company_id: 1, name: "Acme", logo: null } }]);
     const res = mockRes();
     await MODULES.getAllActiveJobs(mockReq({ query: {} }), res);
     expect(res.json).toHaveBeenCalledWith(

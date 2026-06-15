@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import { sql } from "./db";
+import { prisma } from "./db";
 import { signAccessToken } from "./token";
 import { accessCookieOptions } from "./cookies";
 
@@ -43,7 +43,6 @@ export const isAuthenticated = async (
       req.user = decoded;
       return next();
     } catch {
-      // fall through to refresh token
     }
   }
 
@@ -57,13 +56,10 @@ export const isAuthenticated = async (
       process.env.JWT_REFRESH_SECRET as string,
     ) as { user_id: number };
 
-    const rows = await sql`
-      SELECT user_id, role, refresh_token
-      FROM users
-      WHERE user_id = ${decoded.user_id}
-      LIMIT 1
-    `;
-    const user = rows[0] as { user_id: number; role: string; refresh_token: string } | undefined;
+    const user = await prisma.user.findFirst({
+      where: { user_id: decoded.user_id },
+      select: { user_id: true, role: true, refresh_token: true },
+    });
 
     if (!user || user.refresh_token !== refreshToken) {
       return res.status(401).json({ message: "Unauthorized" });
