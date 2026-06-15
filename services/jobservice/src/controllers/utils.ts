@@ -101,3 +101,24 @@ export const WORK_LOCATIONS = ["On-site", "Remote", "Hybrid"] as const;
 
 export type JobType = (typeof JOB_TYPES)[number];
 export type WorkLocation = (typeof WORK_LOCATIONS)[number];
+
+const JOB_TYPE_MAP: Record<string, string> = {
+  "Full-time": "Full_time",
+  "Part-time": "Part_time",
+  Contract: "Contract",
+  Internship: "Internship",
+};
+
+const WORK_LOCATION_MAP: Record<string, string> = {
+  "On-site": "On_site",
+  Remote: "Remote",
+  Hybrid: "Hybrid",
+};
+
+export function mapJobType(v: string): string {
+  return JOB_TYPE_MAP[v] ?? v;
+}
+
+export function mapWorkLocation(v: string): string {
+  return WORK_LOCATION_MAP[v] ?? v;
+}

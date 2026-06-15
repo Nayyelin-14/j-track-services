@@ -17,6 +17,8 @@ import {
   WorkLocation,
   JOBS_LIST_VERSION_KEY,
   getListVersion,
+  mapJobType,
+  mapWorkLocation,
 } from "./utils.js";
 
 export const createJob = TryCatch(
@@ -93,10 +95,10 @@ export const createJob = TryCatch(
         title,
         description,
         location,
-        job_type: job_type as any,
+        job_type: mapJobType(job_type) as any,
         openings,
         role,
-        work_location: work_location as any,
+        work_location: mapWorkLocation(work_location) as any,
         company_id,
         posted_by_recruiter_id: req.user.user_id,
         ...(salary !== null && { salary }),
@@ -222,7 +224,7 @@ export const updateJob = TryCatch(
           ),
         );
       }
-      data.job_type = req.body.job_type;
+      data.job_type = mapJobType(req.body.job_type);
     }
 
     if (req.body.work_location !== undefined) {
@@ -234,7 +236,7 @@ export const updateJob = TryCatch(
           ),
         );
       }
-      data.work_location = req.body.work_location;
+      data.work_location = mapWorkLocation(req.body.work_location);
     }
 
     if (req.body.openings !== undefined) {
