@@ -391,7 +391,7 @@ export const getAllActiveJobs = TryCatch(
       prisma.job.count({ where }),
     ]);
 
-    const mappedJobs = jobs.map((j: { job_id: number; title: string; description: string; salary: unknown; location: string | null; job_type: unknown; role: string; work_location: unknown; openings: unknown; created_at: Date; company: { company_id: number; name: string; logo: string | null } }) => ({
+    const mappedJobs = jobs.map((j) => ({
       job_id: j.job_id,
       title: j.title,
       description: j.description,
