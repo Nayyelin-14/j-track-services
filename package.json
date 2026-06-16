@@ -6,7 +6,8 @@
   "scripts": {
     "build": "pnpm -r build",
     "build:shared": "pnpm --filter @jtrack/shared build",
-    "dev": "pnpm build:shared && pnpm -r --parallel --filter './services/*' dev",
+    "dev": "pnpm build:shared && sudo -n nginx -s reload 2>/dev/null; sudo -n nginx 2>/dev/null; pnpm -r --parallel --filter './services/*' dev",
+    "dev:down": "sudo nginx -s stop 2>/dev/null; echo 'nginx stopped'",
     "dev:auth": "pnpm --filter auth dev",
     "dev:job": "pnpm --filter jobservice dev",
     "dev:user": "pnpm --filter user dev",
