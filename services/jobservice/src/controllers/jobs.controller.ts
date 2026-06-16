@@ -90,6 +90,11 @@ export const createJob = TryCatch(
       return next(new ErrorHandler(403, "You do not own this company"));
     }
 
+    const details = req.body.details;
+    if (details !== undefined && typeof details !== "object") {
+      return next(new ErrorHandler(400, "Details must be a JSON object"));
+    }
+
     const job = await prisma.job.create({
       data: {
         title,
@@ -102,6 +107,7 @@ export const createJob = TryCatch(
         company_id,
         posted_by_recruiter_id: req.user.user_id,
         ...(salary !== null && { salary }),
+        ...(details !== undefined && { details }),
       } as any,
       select: {
         job_id: true,
@@ -116,6 +122,7 @@ export const createJob = TryCatch(
         company_id: true,
         is_active: true,
         created_at: true,
+        details: true,
       },
     });
     await invalidateJobsCache();
@@ -271,6 +278,16 @@ export const updateJob = TryCatch(
       data.is_active = req.body.is_active;
     }
 
+    if (req.body.details !== undefined) {
+      if (req.body.details === null) {
+        data.details = null;
+      } else if (typeof req.body.details === "object") {
+        data.details = req.body.details;
+      } else {
+        return next(new ErrorHandler(400, "Details must be a JSON object"));
+      }
+    }
+
     const updatedJob = await prisma.job.update({
       where: { job_id },
       data,
@@ -287,6 +304,7 @@ export const updateJob = TryCatch(
         company_id: true,
         is_active: true,
         created_at: true,
+        details: true,
       },
     });
     await invalidateJobsCache(job_id);
@@ -357,6 +375,7 @@ export const getAllActiveJobs = TryCatch(
           work_location: true,
           openings: true,
           created_at: true,
+          details: true,
           company: {
             select: {
               company_id: true,
@@ -372,7 +391,7 @@ export const getAllActiveJobs = TryCatch(
       prisma.job.count({ where }),
     ]);
 
-    const mappedJobs = jobs.map((j: { job_id: number; title: string; description: string; salary: unknown; location: string | null; job_type: unknown; role: string; work_location: unknown; openings: unknown; created_at: Date; company: { company_id: number; name: string; logo: string | null } }) => ({
+    const mappedJobs = jobs.map((j) => ({
       job_id: j.job_id,
       title: j.title,
       description: j.description,
@@ -383,6 +402,7 @@ export const getAllActiveJobs = TryCatch(
       work_location: j.work_location,
       openings: j.openings,
       created_at: j.created_at,
+      details: j.details,
       company_name: j.company.name,
       company_logo: j.company.logo,
       company_id: j.company.company_id,
@@ -447,6 +467,7 @@ export const getJobById = TryCatch(
           openings: true,
           is_active: true,
           created_at: true,
+          details: true,
           company: {
             select: {
               company_id: true,

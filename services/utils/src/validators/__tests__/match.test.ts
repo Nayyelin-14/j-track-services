@@ -15,6 +15,36 @@ const validPayload: AnalyzeMatchInput = {
   },
 };
 
+const payloadWithDetails: AnalyzeMatchInput = {
+  resumeUrl: "https://res.cloudinary.com/demo/resume.pdf",
+  job: {
+    title: "Software Engineer",
+    description: "We are looking for a senior software engineer...",
+    salary: 150000,
+    location: "San Francisco, CA",
+    job_type: "full-time",
+    work_location: "remote",
+    role: "Senior Software Engineer",
+    company_name: "Acme Corp",
+    details: {
+      responsibilities: "Build and maintain microservices",
+      required_skills: "5+ years of Node.js, TypeScript, PostgreSQL",
+      preferred_skills: "Docker, Kubernetes, AWS",
+      tech_stack: ["Node.js", "React", "PostgreSQL", "Docker"],
+      experience_years: 5,
+      education: "Bachelor's in Computer Science",
+      certifications: ["AWS Certified Developer"],
+      languages: ["English", "Japanese"],
+      benefits: "Health insurance, remote work",
+      visa_sponsorship: true,
+      working_hours: "9:00 - 18:00",
+      team_structure: "5 engineers, 1 PM",
+      career_growth: "Senior to Staff Engineer track",
+      interview_process: "Phone screen, tech interview, onsite",
+    },
+  },
+};
+
 describe("analyzeMatchSchema", () => {
   it("accepts a valid full payload", () => {
     const result = analyzeMatchSchema.parse(validPayload);
@@ -132,5 +162,42 @@ describe("analyzeMatchSchema", () => {
   it("rejects payload with missing job object entirely", () => {
     const { job: _, ...noJob } = validPayload;
     expect(() => analyzeMatchSchema.parse(noJob)).toThrow();
+  });
+
+  it("accepts payload with full details object", () => {
+    const result = analyzeMatchSchema.parse(payloadWithDetails);
+    expect(result.job.details?.responsibilities).toBe("Build and maintain microservices");
+    expect(result.job.details?.tech_stack).toEqual(["Node.js", "React", "PostgreSQL", "Docker"]);
+    expect(result.job.details?.experience_years).toBe(5);
+    expect(result.job.details?.visa_sponsorship).toBe(true);
+  });
+
+  it("accepts payload without details", () => {
+    const result = analyzeMatchSchema.parse(validPayload);
+    expect(result.job.details).toBeUndefined();
+  });
+
+  it("rejects invalid experience_years (negative)", () => {
+    const payload = {
+      ...validPayload,
+      job: {
+        ...validPayload.job,
+        details: { experience_years: -1 },
+      },
+    };
+    const result = analyzeMatchSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects invalid tech_stack (not array)", () => {
+    const payload = {
+      ...validPayload,
+      job: {
+        ...validPayload.job,
+        details: { tech_stack: "not-an-array" },
+      },
+    };
+    const result = analyzeMatchSchema.safeParse(payload);
+    expect(result.success).toBe(false);
   });
 });

@@ -5,12 +5,14 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import authRoutes from "./routes/auth.js";
 import { errorMiddleware } from "@jtrack/shared/errorHandler";
+import { requestLogger } from "@jtrack/shared/logger";
 
 const app = express();
 
 app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
+app.use(requestLogger);
 app.use(
   cors({
     origin: process.env.FRONTEND_URL || "http://localhost:3000",

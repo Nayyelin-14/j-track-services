@@ -15,18 +15,20 @@ function buildJobPayload(job: {
   work_location: string | null;
   role: string | null;
   company_name: string | null;
+  details: Record<string, unknown> | null;
   [key: string]: unknown;
 }): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     title: job.title,
     description: job.description,
   };
-  if (job.salary != null) payload.salary = job.salary;
+  if (job.salary != null) payload.salary = Number(job.salary);
   if (job.location) payload.location = job.location;
   if (job.job_type) payload.job_type = job.job_type;
   if (job.work_location) payload.work_location = job.work_location;
   if (job.role) payload.role = job.role;
   if (job.company_name) payload.company_name = job.company_name;
+  if (job.details) payload.details = job.details;
   return payload;
 }
 
@@ -74,6 +76,7 @@ export const analyzeJobMatch = TryCatch(async (req: AuthRequest, res: Response) 
       job_type: true,
       work_location: true,
       role: true,
+      details: true,
       company: { select: { name: true } },
     },
   });
