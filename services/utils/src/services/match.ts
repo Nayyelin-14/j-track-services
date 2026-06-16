@@ -17,6 +17,25 @@ export interface JobDetails {
   work_location: string | undefined;
   role: string | undefined;
   company_name: string | undefined;
+  details?: {
+    responsibilities?: string;
+    required_skills?: string;
+    preferred_skills?: string;
+    tech_stack?: string[];
+    experience_years?: number;
+    education?: string;
+    certifications?: string[];
+    languages?: string[];
+    benefits?: string;
+    visa_sponsorship?: boolean;
+    working_hours?: string;
+    team_structure?: string;
+    reporting_line?: string;
+    career_growth?: string;
+    interview_process?: string;
+    application_instructions?: string;
+    [key: string]: unknown;
+  } | null;
 }
 
 const matchPrompt = (resumeText: string, job: JobDetails): string => {
@@ -39,6 +58,25 @@ const matchPrompt = (resumeText: string, job: JobDetails): string => {
   if (job.work_location) parts.push(`Work Location: ${job.work_location}`);
   if (job.role) parts.push(`Role: ${job.role}`);
   if (job.company_name) parts.push(`Company: ${job.company_name}`);
+
+  if (job.details) {
+    const d = job.details;
+    if (d.responsibilities) parts.push(`Responsibilities: ${d.responsibilities}`);
+    if (d.required_skills) parts.push(`Required Skills: ${d.required_skills}`);
+    if (d.preferred_skills) parts.push(`Preferred Skills: ${d.preferred_skills}`);
+    if (d.tech_stack?.length) parts.push(`Tech Stack: ${d.tech_stack.join(", ")}`);
+    if (d.experience_years) parts.push(`Experience Required: ${d.experience_years} years`);
+    if (d.education) parts.push(`Education: ${d.education}`);
+    if (d.certifications?.length) parts.push(`Certifications: ${d.certifications.join(", ")}`);
+    if (d.languages?.length) parts.push(`Languages: ${d.languages.join(", ")}`);
+    if (d.benefits) parts.push(`Benefits: ${d.benefits}`);
+    if (d.visa_sponsorship != null) parts.push(`Visa Sponsorship: ${d.visa_sponsorship ? "Yes" : "No"}`);
+    if (d.working_hours) parts.push(`Working Hours: ${d.working_hours}`);
+    if (d.team_structure) parts.push(`Team Structure: ${d.team_structure}`);
+    if (d.reporting_line) parts.push(`Reports To: ${d.reporting_line}`);
+    if (d.career_growth) parts.push(`Career Growth: ${d.career_growth}`);
+    if (d.interview_process) parts.push(`Interview Process: ${d.interview_process}`);
+  }
 
   parts.push(
     "",

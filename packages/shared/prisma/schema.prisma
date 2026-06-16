@@ -125,6 +125,7 @@ model Job {
   company_id             Int
   posted_by_recruiter_id Int
   created_at             DateTime       @default(now()) @db.Timestamptz(6)
+  details                Json?          @db.JsonB
   is_active              Boolean?       @default(true)
   applications           Application[]
   job_analytics          JobAnalytics[]

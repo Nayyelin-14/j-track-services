@@ -354,6 +354,91 @@ describe("streamMatchAnalysis", () => {
     expect(prompt).not.toContain("undefined");
   });
 
+  it("includes details fields in the AI prompt", async () => {
+    const res = createMockResponse();
+    const signal = new AbortController().signal;
+
+    const jobWithDetails = {
+      ...validJob,
+      details: {
+        responsibilities: "Build and maintain microservices",
+        required_skills: "5+ years Node.js, TypeScript",
+        preferred_skills: "Docker, Kubernetes",
+        tech_stack: ["Node.js", "React", "PostgreSQL"],
+        experience_years: 5,
+        education: "Bachelor's in CS",
+        certifications: ["AWS Certified"],
+        languages: ["English", "Japanese"],
+        benefits: "Health insurance, remote work",
+        visa_sponsorship: true,
+        working_hours: "9:00 - 18:00",
+        team_structure: "5 engineers, 1 PM",
+        reporting_line: "Engineering Manager",
+        career_growth: "Senior to Staff Engineer",
+        interview_process: "Phone screen, tech interview",
+      },
+    };
+
+    const create = setupGroqStream([
+      '{"matchScore":90,"strengths":[],"gaps":[],"recommendation":"yes",' +
+      '"recommendationReason":"","summary":"","fullAnalysis":""}',
+    ]);
+
+    await matchService.streamMatchAnalysis(
+      "https://res.cloudinary.com/demo/resume.pdf",
+      jobWithDetails,
+      res,
+      signal,
+    );
+
+    const [[createArgs]] = create.mock.calls as unknown as [[{
+      messages: Array<{ content: string }>;
+    }]];
+    const prompt = createArgs.messages[0].content;
+
+    expect(prompt).toContain("Responsibilities: Build and maintain microservices");
+    expect(prompt).toContain("Required Skills: 5+ years Node.js, TypeScript");
+    expect(prompt).toContain("Preferred Skills: Docker, Kubernetes");
+    expect(prompt).toContain("Tech Stack: Node.js, React, PostgreSQL");
+    expect(prompt).toContain("Experience Required: 5 years");
+    expect(prompt).toContain("Education: Bachelor's in CS");
+    expect(prompt).toContain("Certifications: AWS Certified");
+    expect(prompt).toContain("Languages: English, Japanese");
+    expect(prompt).toContain("Benefits: Health insurance, remote work");
+    expect(prompt).toContain("Visa Sponsorship: Yes");
+    expect(prompt).toContain("Working Hours: 9:00 - 18:00");
+    expect(prompt).toContain("Team Structure: 5 engineers, 1 PM");
+    expect(prompt).toContain("Reports To: Engineering Manager");
+    expect(prompt).toContain("Career Growth: Senior to Staff Engineer");
+    expect(prompt).toContain("Interview Process: Phone screen, tech interview");
+  });
+
+  it("omits details fields when not provided", async () => {
+    const res = createMockResponse();
+    const signal = new AbortController().signal;
+
+    const create = setupGroqStream([
+      '{"matchScore":50,"strengths":[],"gaps":[],"recommendation":"maybe",' +
+      '"recommendationReason":"","summary":"","fullAnalysis":""}',
+    ]);
+
+    await matchService.streamMatchAnalysis(
+      "https://res.cloudinary.com/demo/resume.pdf",
+      validJob,
+      res,
+      signal,
+    );
+
+    const [[createArgs]] = create.mock.calls as unknown as [[{
+      messages: Array<{ content: string }>;
+    }]];
+    const prompt = createArgs.messages[0].content;
+
+    expect(prompt).not.toContain("Responsibilities:");
+    expect(prompt).not.toContain("Required Skills:");
+    expect(prompt).not.toContain("Tech Stack:");
+  });
+
   it("returns fallback values when AI returns invalid JSON", async () => {
     const res = createMockResponse();
     const signal = new AbortController().signal;
