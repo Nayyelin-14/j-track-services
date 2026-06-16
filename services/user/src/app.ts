@@ -5,6 +5,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import userRoutes from "./routes/user.routes.js";
 import { errorMiddleware } from "@jtrack/shared/errorHandler";
+import { requestLogger } from "@jtrack/shared/logger";
 
 const app = express();
 
@@ -28,6 +29,7 @@ app.use(globalLimiter);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
+app.use(requestLogger);
 
 app.use("/api/users", userRoutes);
 
