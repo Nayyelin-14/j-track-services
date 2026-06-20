@@ -49,6 +49,6 @@
     "jsonwebtoken": "^9.0.3",
     "kafkajs": "^2.2.4",
     "morgan": "^1.11.0",
-    "prisma": "6.19.3"
+    "prisma": "7.8.0"
   }
 }
