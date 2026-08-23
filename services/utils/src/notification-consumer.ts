@@ -1,9 +1,14 @@
-import { Kafka, Consumer } from "kafkajs";
 import { prisma } from "@jtrack/shared/db";
+import { createConsumer } from "@jtrack/shared/kafka/consumer-factory";
+import {
+  isAlreadyProcessed,
+  markProcessed,
+} from "@jtrack/shared/kafka/idempotency";
+import { getMetrics } from "@jtrack/shared/kafka/metrics";
+import { createTransporter, sendWithRetry, mailDeliveryEnabled } from "./mail.js";
 import type { JobAppliedEvent } from "@jtrack/shared/kafka/events";
-import type { KafkaHealth, ConsumerInstance } from "@jtrack/shared/kafka/types";
-import { resolveKafkaConfig, checkKafkaHealth } from "@jtrack/shared";
-import { createTransporter, sendWithRetry } from "./mail.js";
+
+const CONSUMER_ID = "notification-service";
 
 function newApplicationTemplate(applicantName: string, jobTitle: string, companyName: string): string {
   return `
@@ -58,108 +63,115 @@ function newApplicationTemplate(applicantName: string, jobTitle: string, company
 </html>`;
 }
 
-export function createNotificationConsumer(): ConsumerInstance {
-  let consumer: Consumer | null = null;
-  let running = false;
+export function createNotificationConsumer() {
+  const transporter = createTransporter();
+  const maxRetries = Number(process.env.MAIL_SEND_RETRIES) || 3;
 
-  return {
-    async start() {
-      if (running) return;
+  return createConsumer({
+    clientId: "notification-service",
+    groupId: process.env.KAFKA_NOTIFICATION_GROUP || "notification-group",
+    consumerId: CONSUMER_ID,
+    topics: [process.env.KAFKA_JOB_EVENTS_TOPIC || "job-events"],
+    dlqTopic: process.env.KAFKA_NOTIFICATION_DLQ_TOPIC || "job-events-dlq",
+    shouldProcess: (envelope) => {
+      const payload = envelope.payload as { type?: string };
+      return payload?.type === "job.applied";
+    },
+    handler: async (ctx) => {
+      const event = ctx.envelope.payload as JobAppliedEvent;
 
-      const kafka = new Kafka(resolveKafkaConfig("notification-service"));
-      consumer = kafka.consumer({
-        groupId: process.env.KAFKA_NOTIFICATION_GROUP || "notification-group",
-      });
+      // External SMTP effect: check-then-mark idempotency (at-least-once).
+      if (await isAlreadyProcessed(prisma, CONSUMER_ID, ctx.envelope.eventId)) {
+        getMetrics(CONSUMER_ID).recordDeduped();
+        ctx.log("info", "Duplicate notification skipped", {
+          eventId: ctx.envelope.eventId,
+          correlationId: ctx.envelope.correlationId,
+        });
+        return;
+      }
 
-      await consumer.connect();
-      await consumer.subscribe({
-        topic: process.env.KAFKA_JOB_EVENTS_TOPIC || "job-events",
-        fromBeginning: false,
-      });
-
-      const transporter = createTransporter();
-      running = true;
-      console.log(`[Notification Consumer] Started, listening on "${process.env.KAFKA_JOB_EVENTS_TOPIC || "job-events"}"`);
-
-      await consumer.run({
-        eachMessage: async ({ message }) => {
-          const rawValue = message.value?.toString();
-          if (!rawValue) return;
-
-          let event: { type: string };
-          try {
-            event = JSON.parse(rawValue);
-          } catch {
-            console.warn("[Notification Consumer] Invalid JSON, skipping");
-            return;
-          }
-
-          if (event.type !== "job.applied") return;
-
-          const { job_id, applicant_id } = event as JobAppliedEvent;
-
-          try {
-            const job = await prisma.job.findFirst({
-              where: { job_id },
-              select: {
-                title: true,
-                company: { select: { name: true, recruiter_id: true } },
-              },
-            });
-
-            if (!job) {
-              console.warn(`[Notification Consumer] Job ${job_id} not found, skipping`);
-              return;
-            }
-
-            const recruiter = await prisma.user.findFirst({
-              where: { user_id: job.company.recruiter_id },
-              select: { email: true },
-            });
-
-            if (!recruiter) {
-              console.warn(`[Notification Consumer] Recruiter ${job.company.recruiter_id} not found, skipping`);
-              return;
-            }
-
-            const applicant = await prisma.user.findFirst({
-              where: { user_id: applicant_id },
-              select: { name: true },
-            });
-
-            const applicantName = applicant?.name || `User #${applicant_id}`;
-
-            await sendWithRetry(transporter, {
-              from: process.env.MAIL_USER,
-              to: recruiter.email,
-              subject: `New Application: ${job.title} at ${job.company.name}`,
-              html: newApplicationTemplate(applicantName, job.title, job.company.name),
-            }, "Notification");
-
-            console.log(`[Notification] Sent new application alert to recruiter ${recruiter.email} for job ${job_id}`);
-          } catch (err) {
-            console.error(`[Notification Consumer] Failed to process job.applied event for job ${job_id}:`, err);
-          }
+      const job = await prisma.job.findFirst({
+        where: { job_id: event.job_id },
+        select: {
+          title: true,
+          company: { select: { name: true, recruiter_id: true } },
         },
       });
-    },
 
-    async stop() {
-      if (!running || !consumer) return;
-      running = false;
-      console.log("[Notification Consumer] Stopping...");
-      await consumer.stop();
-      await consumer.disconnect();
-      consumer = null;
-      console.log("[Notification Consumer] Stopped");
-    },
+      if (!job) {
+        ctx.log("warn", `Job ${event.job_id} not found, marking processed`, {
+          eventId: ctx.envelope.eventId,
+        });
+        await markProcessed(prisma, {
+          consumerId: CONSUMER_ID,
+          envelope: ctx.envelope,
+          partition: ctx.partition,
+          offset: ctx.offset,
+        });
+        return;
+      }
 
-    isRunning(): boolean {
-      return running;
-    },
+      const recruiter = await prisma.user.findFirst({
+        where: { user_id: job.company.recruiter_id },
+        select: { email: true },
+      });
 
-    healthCheck(): Promise<KafkaHealth> {
-      return checkKafkaHealth("notification-service", consumer !== null && running);
+      if (!recruiter) {
+        ctx.log("warn", `Recruiter ${job.company.recruiter_id} not found, marking processed`, {
+          eventId: ctx.envelope.eventId,
+        });
+        await markProcessed(prisma, {
+          consumerId: CONSUMER_ID,
+          envelope: ctx.envelope,
+          partition: ctx.partition,
+          offset: ctx.offset,
+        });
+        return;
+      }
+
+      const applicant = await prisma.user.findFirst({
+        where: { user_id: event.applicant_id },
+        select: { name: true },
+      });
+      const applicantName = applicant?.name || `User #${event.applicant_id}`;
+
+      if (mailDeliveryEnabled()) {
+        await sendWithRetry(
+          transporter,
+          {
+            from: process.env.MAIL_USER,
+            to: recruiter.email,
+            subject: `New Application: ${job.title} at ${job.company.name}`,
+            html: newApplicationTemplate(applicantName, job.title, job.company.name),
+          },
+          "Notification",
+          maxRetries,
+        );
+      } else {
+        ctx.log("info", "Mail delivery disabled - preview only", {
+          to: recruiter.email,
+        });
+      }
+
+      await markProcessed(prisma, {
+        consumerId: CONSUMER_ID,
+        envelope: ctx.envelope,
+        partition: ctx.partition,
+        offset: ctx.offset,
+      });
+
+      ctx.log("info", "Notification processed", {
+        eventId: ctx.envelope.eventId,
+        correlationId: ctx.envelope.correlationId,
+        recruiter: recruiter.email,
+        jobId: event.job_id,
+      });
     },
-  };
+    log: (level, msg, meta) => {
+      const prefix = "[Notification Consumer]";
+      if (level === "error") console.error(prefix, msg, meta ?? {});
+      else if (level === "warn") console.warn(prefix, msg, meta ?? {});
+      else console.log(prefix, msg, meta ?? {});
+    },
+  });
 }

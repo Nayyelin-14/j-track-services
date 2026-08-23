@@ -6,12 +6,14 @@ import rateLimit from "express-rate-limit";
 import authRoutes from "./routes/auth.js";
 import { errorMiddleware } from "@jtrack/shared/errorHandler";
 import { requestLogger } from "@jtrack/shared/logger";
+import { correlationMiddleware } from "@jtrack/shared/kafka/correlation";
 
 const app = express();
 
 app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
+app.use(correlationMiddleware());
 app.use(requestLogger);
 app.use(
   cors({
@@ -22,7 +24,9 @@ app.use(
 
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  // Test runs make many requests from one IP; mirror the auth limiter's
+  // relaxed ceiling so E2E suites aren't throttled by unrelated endpoints.
+  max: process.env.NODE_ENV === "test" ? 2000 : 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: "Too many requests, please try again later" },
@@ -39,6 +43,8 @@ const authLimiter = rateLimit({
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/register", authLimiter);
 app.use("/api/auth/forgot-password", authLimiter);
+app.use("/api/auth/verify-email", authLimiter);
+app.use("/api/auth/resend-verification", authLimiter);
 
 app.use("/api/auth", authRoutes);
 

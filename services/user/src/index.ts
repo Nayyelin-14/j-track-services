@@ -1,4 +1,8 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import { resolve } from "node:path";
+
+dotenv.config({ path: resolve(process.cwd(), "../../.env") });
+
 import app from "./app.js";
 import { redisClient } from "./redis.js";
 

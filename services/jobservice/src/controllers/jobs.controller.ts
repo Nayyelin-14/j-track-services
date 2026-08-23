@@ -5,10 +5,13 @@ import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
 import { kafka } from "../kafka.js";
 import { redisClient } from "../redis.js";
+import { getCorrelationId } from "@jtrack/shared/kafka/correlation";
+import { jobPartitionKey } from "@jtrack/shared/kafka/partitioning";
 import {
   CACHE_KEYS,
   invalidateJobsCache,
   invalidateCompaniesCache,
+  parseSalary,
   sanitize,
   sanitizePositiveInt,
   JOB_TYPES,
@@ -65,16 +68,11 @@ export const createJob = TryCatch(
       return next(new ErrorHandler(400, "Openings cannot exceed 999"));
     }
 
-    let salary: number | null = null;
-    if (req.body.salary !== undefined && req.body.salary !== "") {
-      const parsed = parseFloat(req.body.salary);
-      if (isNaN(parsed) || parsed < 0) {
-        return next(new ErrorHandler(400, "Salary must be a positive number"));
-      }
-      if (parsed > 99999999.99) {
-        return next(new ErrorHandler(400, "Salary value is too large"));
-      }
-      salary = parsed;
+    let salary: string | null | undefined;
+    try {
+      salary = parseSalary(req.body.salary);
+    } catch (err) {
+      return next(err);
     }
 
     const company_id = sanitizePositiveInt(req.body.company_id, "Company ID");
@@ -106,7 +104,7 @@ export const createJob = TryCatch(
         work_location: mapWorkLocation(work_location) as any,
         company_id,
         posted_by_recruiter_id: req.user.user_id,
-        ...(salary !== null && { salary }),
+        ...(salary !== undefined && salary !== null && { salary }),
         ...(details !== undefined && { details }),
       } as any,
       select: {
@@ -255,19 +253,14 @@ export const updateJob = TryCatch(
     }
 
     if (req.body.salary !== undefined) {
-      if (req.body.salary === "" || req.body.salary === null) {
-        data.salary = null;
-      } else {
-        const parsed = parseFloat(req.body.salary);
-        if (isNaN(parsed) || parsed < 0) {
-          return next(
-            new ErrorHandler(400, "Salary must be a positive number"),
-          );
+      try {
+        const salary = parseSalary(req.body.salary);
+        // undefined means the value was absent — nothing to update
+        if (salary !== undefined) {
+          data.salary = salary;
         }
-        if (parsed > 99999999.99) {
-          return next(new ErrorHandler(400, "Salary value is too large"));
-        }
-        data.salary = parsed;
+      } catch (err) {
+        return next(err);
       }
     }
 
@@ -320,17 +313,51 @@ export const updateJob = TryCatch(
 
 export const getAllActiveJobs = TryCatch(
   async (req: AuthRequest, res: Response) => {
-    const { title, location } = req.query as {
+    const { title, location, job_type, work_location } = req.query as {
       title?: string;
       location?: string;
+      job_type?: string | string[];
+      work_location?: string | string[];
     };
+
+    const parseFilter = (value: string | string[] | undefined): string[] => {
+      if (value === undefined) return [];
+      const parts = Array.isArray(value) ? value : [value];
+      return parts
+        .flatMap((v) => v.split(","))
+        .map((v) => v.trim())
+        .filter(Boolean);
+    };
+
+    const rawJobTypes = parseFilter(job_type);
+    const rawWorkLocations = parseFilter(work_location);
+
+    const invalidJobType = rawJobTypes.find(
+      (v) => !JOB_TYPES.includes(v as JobType),
+    );
+    if (invalidJobType) {
+      throw new ErrorHandler(400, `Invalid job_type filter: ${invalidJobType}`);
+    }
+
+    const invalidWorkLocation = rawWorkLocations.find(
+      (v) => !WORK_LOCATIONS.includes(v as WorkLocation),
+    );
+    if (invalidWorkLocation) {
+      throw new ErrorHandler(
+        400,
+        `Invalid work_location filter: ${invalidWorkLocation}`,
+      );
+    }
 
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
     const offset = (page - 1) * limit;
 
+    const jobTypeFilters = rawJobTypes.map(mapJobType);
+    const workLocationFilters = rawWorkLocations.map(mapWorkLocation);
+
     const version = await getListVersion(JOBS_LIST_VERSION_KEY);
-    const cacheKey = `jobs:active:v${version};page=${page};limit=${limit};title=${title ?? ""};location=${location ?? ""}`;
+    const cacheKey = `jobs:active:v${version};page=${page};limit=${limit};title=${title ?? ""};location=${location ?? ""};job_type=${jobTypeFilters.join(",")};work_location=${workLocationFilters.join(",")}`;
 
     try {
       const cached = await redisClient.get(cacheKey);
@@ -359,6 +386,12 @@ export const getAllActiveJobs = TryCatch(
     }
     if (locationFilter) {
       where.location = { contains: location, mode: "insensitive" };
+    }
+    if (jobTypeFilters.length > 0) {
+      where.job_type = { in: jobTypeFilters };
+    }
+    if (workLocationFilters.length > 0) {
+      where.work_location = { in: workLocationFilters };
     }
 
     const [jobs, totalResult] = await Promise.all([
@@ -424,6 +457,110 @@ export const getAllActiveJobs = TryCatch(
       total: totalResult,
       page,
       totalPages: Math.ceil(totalResult / limit),
+      jobs: mappedJobs,
+    });
+  },
+);
+
+export const getMyJobs = TryCatch(
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return next(new ErrorHandler(401, "Unauthorized"));
+    }
+
+    if (req.user.role !== "recruiter") {
+      return next(
+        new ErrorHandler(403, "Only recruiters can view their jobs"),
+      );
+    }
+
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const status = typeof req.query.status === "string" ? req.query.status.trim() : "";
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+    const offset = (page - 1) * limit;
+
+    const where: any = { company: { recruiter_id: req.user.user_id } };
+    if (search) {
+      where.OR = [
+        { title: { contains: search, mode: "insensitive" } },
+        { location: { contains: search, mode: "insensitive" } },
+        { company: { name: { contains: search, mode: "insensitive" } } },
+      ];
+    }
+    if (status === "active") {
+      where.is_active = true;
+    } else if (status === "paused") {
+      where.is_active = false;
+    }
+
+    const [jobs, total] = await Promise.all([
+      prisma.job.findMany({
+        where,
+        select: {
+          job_id: true,
+          title: true,
+          description: true,
+          salary: true,
+          location: true,
+          job_type: true,
+          role: true,
+          work_location: true,
+          openings: true,
+          is_active: true,
+          created_at: true,
+          details: true,
+          company: {
+            select: {
+              company_id: true,
+              name: true,
+              logo: true,
+            },
+          },
+        },
+        orderBy: { created_at: "desc" },
+        skip: offset,
+        take: limit,
+      }),
+      prisma.job.count({ where }),
+    ]);
+
+    const jobIds = jobs.map((j) => j.job_id);
+    const counts = jobIds.length
+      ? await prisma.application.groupBy({
+          by: ["job_id"],
+          where: { job_id: { in: jobIds } },
+          _count: { _all: true },
+        })
+      : [];
+
+    const countMap = new Map(counts.map((c) => [c.job_id, c._count._all]));
+
+    const mappedJobs = jobs.map((j) => ({
+      job_id: j.job_id,
+      title: j.title,
+      description: j.description,
+      salary: j.salary,
+      location: j.location,
+      job_type: j.job_type,
+      role: j.role,
+      work_location: j.work_location,
+      openings: j.openings,
+      is_active: j.is_active,
+      created_at: j.created_at,
+      details: j.details,
+      company_id: j.company.company_id,
+      company_name: j.company.name,
+      company_logo: j.company.logo,
+      total_applications: countMap.get(j.job_id) ?? 0,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      count: mappedJobs.length,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
       jobs: mappedJobs,
     });
   },
@@ -502,11 +639,21 @@ export const getJobById = TryCatch(
       console.error("[Redis] Cache write error (non-fatal):", err);
     }
 
+    // Deliberately best-effort: job.viewed is fire-and-forget analytics telemetry.
+    // It intentionally does NOT go through the transactional outbox — a view is
+    // (a) low-value, so a dropped event is acceptable, and (b) must not fail the
+    // job-detail response. A publish failure is logged, never retried here; the
+    // consumer side treats job.viewed as idempotent-per-call and the loss is
+    // acceptable per the documented at-least-once trade-off. All other business
+    // events (job.applied, application.status_changed) MUST use the outbox.
     kafka.publish("job-events", {
       type: "job.viewed",
       job_id: job.job_id,
       viewer_id: (req as AuthRequest).user?.user_id,
       viewed_at: new Date().toISOString(),
+    }, {
+      key: jobPartitionKey(job.job_id),
+      correlationId: getCorrelationId(),
     }).catch((err: unknown) =>
       console.error("[Kafka] Failed to publish job.viewed event:", err),
     );

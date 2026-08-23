@@ -1,0 +1,305 @@
+name: Production Deploy
+
+# Manual production promotion. Selects ALREADY-PUBLISHED immutable SHA
+# images from GHCR and deploys them to the Azure VM over SSH.
+#
+# - Blank input  = that service is left completely untouched.
+# - Per-service tags are independent: services may run different SHAs.
+# - A shared-code (packages/shared, lockfile, root deps) image may require
+#   a coordinated all-four release; partial selection is blocked unless
+#   explicitly overridden.
+# - Never deploys anything automatically: this workflow only runs when a
+#   human dispatches it with explicit selections.
+
+on:
+  workflow_dispatch:
+    inputs:
+      AUTH_TAG:
+        description: "auth → new Git SHA (blank = leave unchanged)"
+        required: false
+        default: ""
+      USER_TAG:
+        description: "user → new Git SHA (blank = leave unchanged)"
+        required: false
+        default: ""
+      JOBSERVICE_TAG:
+        description: "jobservice → new Git SHA (blank = leave unchanged)"
+        required: false
+        default: ""
+      UTILS_TAG:
+        description: "utils → new Git SHA (blank = leave unchanged)"
+        required: false
+        default: ""
+      allow_shared_partial:
+        description: "Override the coordinated-release guard for shared/dep changes"
+        required: false
+        default: false
+        type: boolean
+      show_current:
+        description: "Only print currently deployed versions (no changes)"
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: "Validate + print plan only — do not touch the VM"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  # Serialize deployments: two operators dispatching at once must queue,
+  # never race on versions.env edits.
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  ALL_SERVICES: auth user jobservice utils
+  # A commit touching any of these produces images that must move together
+  DEPENDENCY_AFFECTING: '^(packages/shared/|pnpm-lock\.yaml$|package\.json$|pnpm-workspace\.yaml$|\.npmrc$)'
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      pairs: ${{ steps.plan.outputs.pairs }}
+      summary: ${{ steps.plan.outputs.summary }}
+    steps:
+      - name: Parse and validate selections
+        id: select
+        env:
+          AUTH_TAG: ${{ inputs.AUTH_TAG }}
+          USER_TAG: ${{ inputs.USER_TAG }}
+          JOBSERVICE_TAG: ${{ inputs.JOBSERVICE_TAG }}
+          UTILS_TAG: ${{ inputs.UTILS_TAG }}
+          SHOW_CURRENT: ${{ inputs.show_current }}
+        run: |
+          set -euo pipefail
+          : > selected.txt
+          : > resolved.txt
+          add() {
+            local svc="$1" val="$2"
+            [ -n "$val" ] || return 0
+            if ! [[ "$val" =~ ^[0-9a-f]{7,40}$ ]]; then
+              echo "::error::$svc tag '$val' is not a valid git SHA" >&2
+              exit 1
+            fi
+            echo "$svc $val" >> selected.txt
+          }
+          add auth        "$AUTH_TAG"
+          add user        "$USER_TAG"
+          add jobservice  "$JOBSERVICE_TAG"
+          add utils       "$UTILS_TAG"
+
+          count=$(wc -l < selected.txt)
+          if [[ "$count" -eq 0 && "$SHOW_CURRENT" != "true" ]]; then
+            echo "::error::No services selected. Fill at least one TAG input." >&2
+            exit 1
+          fi
+          [ "$count" -eq 0 ] && echo "Version inquiry only (show_current)"
+          echo "Selected $count service(s): $(tr '\n' ' ' < selected.txt)"
+
+      - name: Resolve short SHAs to full immutable SHAs
+        id: resolve
+        if: ${{ inputs.show_current != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          : > resolved.txt
+          while read -r svc sha; do
+            full=$(gh api "repos/${{ github.repository }}/commits/$sha" --jq .sha)
+            echo "$svc $full" >> resolved.txt
+            echo "$svc: $sha → $full"
+          done < selected.txt
+
+      - name: Coordinated-release guard (shared / dependency changes)
+        if: ${{ inputs.show_current != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALLOW_PARTIAL: ${{ inputs.allow_shared_partial }}
+        run: |
+          set -euo pipefail
+          selected_count=$(wc -l < resolved.txt)
+
+          for svc_sha in $(cat resolved.txt); do
+            svc="${svc_sha%% *}"
+            sha="${svc_sha##* }"
+            hits=$(gh api "repos/${{ github.repository }}/commits/$sha" --jq '.files[].filename' \
+              | grep -E "$DEPENDENCY_AFFECTING" || true)
+            if [[ -z "$hits" ]] || [[ "$selected_count" -ge 4 ]]; then
+              continue
+            fi
+            if [[ "$ALLOW_PARTIAL" != "true" ]]; then
+              echo "::error::$sha changed dependency-affecting files:" >&2
+              echo "$hits" >&2
+              echo "This requires a COORDINATED release of all four services." >&2
+              echo "Select all four tags, or set allow_shared_partial=true to override." >&2
+              exit 1
+            fi
+            echo "::warning::$svc=$sha affects shared code; partial deploy forced via override."
+          done
+
+      - name: Verify selected images exist in GHCR
+        if: ${{ inputs.show_current != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          while read -r svc sha; do
+            image="$base/$svc:$sha"
+            echo "Checking $image"
+            if ! docker manifest inspect "$image" > /dev/null 2>&1; then
+              echo "::error::Image NOT found in GHCR: $image" >&2
+              echo "Refusing to touch production with a missing artifact." >&2
+              exit 1
+            fi
+          done < resolved.txt
+          docker logout ghcr.io
+
+      - name: Show currently deployed versions (read-only)
+        if: ${{ inputs.show_current == true }}
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          install -m 600 /dev/null key
+          echo "$SSH_KEY" > key
+          ssh -i key -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" \
+            'cat /opt/jtrack/versions.env'
+          rm -f key
+
+      - name: Build deployment plan
+        id: plan
+        run: |
+          set -euo pipefail
+          {
+            echo "### Production deployment plan"
+            echo ""
+            echo "| Service | New image (immutable SHA) |"
+            echo "|---|---|"
+            while read -r svc sha; do
+              echo "| $svc | \`${sha}\` |"
+            done < resolved.txt
+            echo ""
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+              echo "**DRY RUN** — validation succeeded; the VM was not touched."
+              echo "Re-run with \`dry_run=false\` to apply."
+            else
+              echo "**LIVE RUN** — the services above will be pulled and restarted on the VM."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "pairs<<PAIRS_EOF"
+            cat resolved.txt
+            echo "PAIRS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  apply:
+    needs: plan
+    if: ${{ inputs.dry_run == false && inputs.show_current != true }}
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy selected services to VM
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PAIRS: ${{ needs.plan.outputs.pairs }}
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null key
+          echo "$SSH_KEY" > key
+
+          # Remote script receives "service=fullSHA" pairs as arguments so no
+          # untrusted string is ever interpolated into shell syntax.
+          cat > deploy-remote.sh <<'REMOTE'
+          set -euo pipefail
+          cd /opt/jtrack
+          [ -f versions.env ] || { echo "FATAL: versions.env missing"; exit 1; }
+          grep -q '^GHCR_REPO=' versions.env || { echo "FATAL: GHCR_REPO missing from versions.env"; exit 1; }
+
+          cp versions.env versions.env.bak.$(date +%s)
+
+          changed=()
+          for pair in "$@"; do
+            svc="${pair%%=*}"; tag="${pair##*=}"
+            var="${svc^^}_TAG"
+            cur=$(grep "^${var}=" versions.env | cut -d= -f2- || true)
+            if [ "$cur" = "$tag" ]; then
+              echo "$svc already at $tag — skipping"
+              continue
+            fi
+            sed -i "s/^${var}=.*/${var}=${tag}/" versions.env
+            grep -q "^${var}=${tag}\$" versions.env || {
+              echo "FATAL: edit verification failed for $var"; exit 1;
+            }
+            echo "$svc: ${cur:-<unset>} -> $tag"
+            changed+=("$svc")
+          done
+
+          if [ "${#changed[@]}" -eq 0 ]; then
+            echo "All requested services already at target versions. Nothing to do."
+            exit 0
+          fi
+
+          echo "Pulling only: ${changed[*]}"
+          docker compose --env-file versions.env pull "${changed[@]}"
+          echo "Recreating only: ${changed[*]}"
+          docker compose --env-file versions.env up -d "${changed[@]}"
+
+          # Health gate: each service image defines a HEALTHCHECK; wait for it.
+          failed=()
+          for svc in "${changed[@]}"; do
+            cid=$(docker compose --env-file versions.env ps -q "$svc")
+            status="starting"
+            for i in $(seq 1 30); do
+              status=$(docker inspect -f '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo "missing")
+              [ "$status" = "healthy" ] && break
+              sleep 4
+            done
+            if [ "$status" = "healthy" ]; then
+              echo "✓ $svc healthy"
+            else
+              echo "✗ $svc health=$status after 120s"
+              docker logs --tail 50 "$(docker compose --env-file versions.env ps -q "$svc")" || true
+              failed+=("$svc")
+            fi
+          done
+
+          printf '%s %s\n' "$(date -u +%FT%TZ)" "${changed[*]}" >> deployed-versions.txt
+          echo "--- deployed-versions.txt tail ---"
+          tail -5 deployed-versions.txt
+          echo "--- running containers ---"
+          docker compose --env-file versions.env ps
+
+          [ "${#failed[@]}" -eq 0 ] || { echo "HEALTH CHECK FAILED for: ${failed[*]}"; exit 1; }
+          REMOTE
+
+          args=()
+          while IFS=' ' read -r svc sha; do
+            [ -n "$svc" ] && args+=("$svc=$sha")
+          done <<< "$PAIRS"
+
+          ssh -i key -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" \
+            'bash -s' -- "${args[@]}" < deploy-remote.sh
+          rm -f key
+
+      - name: Rollback hint on failure
+        if: failure()
+        run: |
+          echo "::error::Deployment did not complete cleanly."
+          echo "Rollback: re-run THIS workflow with the previous SHA(s) for the affected service(s)."
+          echo "The pre-change state is preserved in /opt/jtrack/versions.env.bak.*"

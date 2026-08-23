@@ -123,10 +123,21 @@ describe("analyzeMatchSchema", () => {
     expect(result.job.salary).toBe(120000);
   });
 
-  it("rejects string salary", () => {
+  it("accepts string salary amounts and ranges", () => {
+    for (const salary of ["120000", "1000-2000"]) {
+      const payload = {
+        ...validPayload,
+        job: { ...validPayload.job, salary },
+      };
+      const result = analyzeMatchSchema.parse(payload);
+      expect(result.job.salary).toBe(salary);
+    }
+  });
+
+  it("rejects overlong string salary", () => {
     const payload = {
       ...validPayload,
-      job: { ...validPayload.job, salary: "high" },
+      job: { ...validPayload.job, salary: "1".repeat(65) },
     };
     const result = analyzeMatchSchema.safeParse(payload);
     expect(result.success).toBe(false);

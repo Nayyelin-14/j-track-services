@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import matchService from "../match";
-import GroqConfig from "../../config/groq";
+import AIConfig from "../../config/ai";
 
 const { mockGetText, MockPDFParse } = vi.hoisted(() => {
   const mockGetText = vi.fn().mockResolvedValue({ text: "" });
@@ -16,12 +16,30 @@ vi.mock("pdf-parse", () => ({
   PDFParse: MockPDFParse,
 }));
 
-vi.mock("../../config/groq", () => ({
-  default: {
-    getInstance: vi.fn(),
-    getModel: vi.fn(() => "llama-3.3-70b-versatile"),
-  },
-}));
+vi.mock("../../config/ai", () => {
+  const mockModel = "nvidia/nemotron";
+  return {
+    default: {
+      getInstance: vi.fn(),
+      getModel: vi.fn(() => mockModel),
+      getFallbackModel: vi.fn(() => "meta/llama-3.3-70b-instruct"),
+      getBaseUrl: vi.fn(() => "https://integrate.api.nvidia.com/v1"),
+    },
+  };
+});
+
+vi.mock("../nim-models", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../nim-models")>();
+  return {
+    ...actual,
+    validateRequestedModel: vi.fn(async () => ({ valid: true })),
+    buildModelChain: vi.fn((requested?: string) =>
+      requested
+        ? [requested, "meta/llama-3.3-70b-instruct"]
+        : ["meta/llama-3.3-70b-instruct", "poolside/laguna-xs-2.1"],
+    ),
+  };
+});
 
 function createMockResponse() {
   const write = vi.fn().mockReturnValue(true);
@@ -41,7 +59,7 @@ async function* asyncIterable<T>(items: T[]): AsyncIterable<T> {
   }
 }
 
-function groqChunk(text: string) {
+function nimChunk(text: string) {
   return {
     choices: [
       {
@@ -53,7 +71,7 @@ function groqChunk(text: string) {
     id: "test",
     object: "chat.completion.chunk",
     created: Date.now(),
-    model: "llama-3.3-70b-versatile",
+    model: "nvidia/nemotron",
   } as const;
 }
 
@@ -106,16 +124,16 @@ function mockFetchResponse(overrides: Partial<{
   });
 }
 
-function setupGroqStream(chunks: string[]) {
-  const mockGroq = {
+function setupNimStream(chunks: string[]) {
+  const mockNim = {
     chat: {
       completions: {
-        create: vi.fn().mockResolvedValue(asyncIterable(chunks.map(groqChunk))),
+        create: vi.fn().mockResolvedValue(asyncIterable(chunks.map(nimChunk))),
       },
     },
   };
-  vi.mocked(GroqConfig.getInstance).mockReturnValue(mockGroq as never);
-  return mockGroq.chat.completions.create;
+  vi.mocked(AIConfig.getInstance).mockReturnValue(mockNim as never);
+  return mockNim.chat.completions.create;
 }
 
 describe("downloadAndParseResume", () => {
@@ -253,7 +271,7 @@ describe("streamMatchAnalysis", () => {
   it("writes download progress, analyze progress, then complete event", async () => {
     const res = createMockResponse();
     const signal = new AbortController().signal;
-    const create = setupGroqStream([
+    const create = setupNimStream([
       `{"matchScore":85,"strengths":["Strong TypeScript skills"],`,
       `"gaps":["No Python"],"recommendation":"yes",`,
       `"recommendationReason":"Strong core alignment",`,
@@ -287,7 +305,7 @@ describe("streamMatchAnalysis", () => {
   it("sends full job context in the AI prompt", async () => {
     const res = createMockResponse();
     const signal = new AbortController().signal;
-    const create = setupGroqStream([
+    const create = setupNimStream([
       '{"matchScore":50,"strengths":[],"gaps":[],"recommendation":"maybe",' +
       '"recommendationReason":"","summary":"","fullAnalysis":""}',
     ]);
@@ -302,7 +320,7 @@ describe("streamMatchAnalysis", () => {
     const [[createArgs]] = create.mock.calls as unknown as [[{
       messages: Array<{ content: string }>;
     }]];
-    const prompt = createArgs.messages[0].content;
+    const prompt = createArgs.messages.map((m) => m.content).join("\n");
 
     expect(prompt).toContain("Senior Software Engineer");
     expect(prompt).toContain("Build and maintain cloud-native microservices");
@@ -329,7 +347,7 @@ describe("streamMatchAnalysis", () => {
       company_name: undefined,
     };
 
-    const create = setupGroqStream([
+    const create = setupNimStream([
       '{"matchScore":30,"strengths":[],"gaps":[],"recommendation":"maybe",' +
       '"recommendationReason":"","summary":"","fullAnalysis":""}',
     ]);
@@ -344,7 +362,7 @@ describe("streamMatchAnalysis", () => {
     const [[createArgs]] = create.mock.calls as unknown as [[{
       messages: Array<{ content: string }>;
     }]];
-    const prompt = createArgs.messages[0].content;
+    const prompt = createArgs.messages.map((m) => m.content).join("\n");
 
     expect(prompt).toContain("Junior Developer");
     expect(prompt).toContain("Entry-level position");
@@ -379,7 +397,7 @@ describe("streamMatchAnalysis", () => {
       },
     };
 
-    const create = setupGroqStream([
+    const create = setupNimStream([
       '{"matchScore":90,"strengths":[],"gaps":[],"recommendation":"yes",' +
       '"recommendationReason":"","summary":"","fullAnalysis":""}',
     ]);
@@ -394,7 +412,7 @@ describe("streamMatchAnalysis", () => {
     const [[createArgs]] = create.mock.calls as unknown as [[{
       messages: Array<{ content: string }>;
     }]];
-    const prompt = createArgs.messages[0].content;
+    const prompt = createArgs.messages.map((m) => m.content).join("\n");
 
     expect(prompt).toContain("Responsibilities: Build and maintain microservices");
     expect(prompt).toContain("Required Skills: 5+ years Node.js, TypeScript");
@@ -417,7 +435,7 @@ describe("streamMatchAnalysis", () => {
     const res = createMockResponse();
     const signal = new AbortController().signal;
 
-    const create = setupGroqStream([
+    const create = setupNimStream([
       '{"matchScore":50,"strengths":[],"gaps":[],"recommendation":"maybe",' +
       '"recommendationReason":"","summary":"","fullAnalysis":""}',
     ]);
@@ -432,7 +450,7 @@ describe("streamMatchAnalysis", () => {
     const [[createArgs]] = create.mock.calls as unknown as [[{
       messages: Array<{ content: string }>;
     }]];
-    const prompt = createArgs.messages[0].content;
+    const prompt = createArgs.messages.map((m) => m.content).join("\n");
 
     expect(prompt).not.toContain("Responsibilities:");
     expect(prompt).not.toContain("Required Skills:");
@@ -442,7 +460,7 @@ describe("streamMatchAnalysis", () => {
   it("returns fallback values when AI returns invalid JSON", async () => {
     const res = createMockResponse();
     const signal = new AbortController().signal;
-    setupGroqStream(["This is not valid JSON at all"]);
+    setupNimStream(["This is not valid JSON at all"]);
 
     await matchService.streamMatchAnalysis(
       "https://res.cloudinary.com/demo/resume.pdf",
@@ -468,7 +486,7 @@ describe("streamMatchAnalysis", () => {
   it("handles markdown-wrapped JSON from AI", async () => {
     const res = createMockResponse();
     const signal = new AbortController().signal;
-    setupGroqStream(['```json\n{"matchScore":72,"recommendation":"yes"}\n```']);
+    setupNimStream(['```json\n{"matchScore":72,"recommendation":"yes"}\n```']);
 
     await matchService.streamMatchAnalysis(
       "https://res.cloudinary.com/demo/resume.pdf",
@@ -491,7 +509,7 @@ describe("streamMatchAnalysis", () => {
   it("handles JSON with surrounding whitespace", async () => {
     const res = createMockResponse();
     const signal = new AbortController().signal;
-    setupGroqStream(["\n\n  \n{\"matchScore\":65}\n  \n\n"]);
+    setupNimStream(["\n\n  \n{\"matchScore\":65}\n  \n\n"]);
 
     await matchService.streamMatchAnalysis(
       "https://res.cloudinary.com/demo/resume.pdf",
@@ -514,7 +532,7 @@ describe("streamMatchAnalysis", () => {
     const res = createMockResponse();
     const signal = new AbortController().signal;
 
-    vi.mocked(GroqConfig.getInstance).mockReturnValue({
+    vi.mocked(AIConfig.getInstance).mockReturnValue({
       chat: {
         completions: {
           create: vi.fn().mockRejectedValue(new Error("API rate limit exceeded")),
@@ -555,12 +573,12 @@ describe("streamMatchAnalysis", () => {
     const controller = new AbortController();
 
     const abortInMiddle = async function* () {
-      yield groqChunk('{"matchScore":85,');
+      yield nimChunk('{"matchScore":85,');
       controller.abort();
-      yield groqChunk('"strengths":["Test"],');
+      yield nimChunk('"strengths":["Test"],');
     };
 
-    vi.mocked(GroqConfig.getInstance).mockReturnValue({
+    vi.mocked(AIConfig.getInstance).mockReturnValue({
       chat: {
         completions: {
           create: vi.fn().mockResolvedValue(abortInMiddle()),

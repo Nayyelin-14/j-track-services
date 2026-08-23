@@ -1,5 +1,5 @@
-# For other developers: everything runs locally in Docker.
-# No cloud accounts needed — uses local Redis + Kafka.
+# For other developers: everything runs locally in Docker except Kafka.
+# Uses local Redis + Confluent Cloud Kafka (configured via .env).
 services:
   redis:
     image: redis:7-alpine
@@ -13,29 +13,6 @@ services:
       timeout: 5s
       retries: 5
 
-  kafka:
-    image: apache/kafka:4.2.0
-    container_name: jtrack-kafka
-    restart: unless-stopped
-    ports:
-      - "9092:9092"
-    environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_LOG_DIRS: /tmp/kafka-logs
-    healthcheck:
-      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--list", "--bootstrap-server", "localhost:9092"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-
   auth:
     build:
       context: .
@@ -44,13 +21,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
     env_file: .env
     environment:
       PORT: 7000
       REDIS_URL: redis://redis:6379
-      KAFKA_BROKER: kafka:9092
       UTILS_SERVICE_URL: http://utils:6001/api/utils
 
   user:
@@ -75,13 +49,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
     env_file: .env
     environment:
       PORT: 7002
       REDIS_URL: redis://redis:6379
-      KAFKA_BROKER: kafka:9092
       UTILS_SERVICE_URL: http://utils:6001/api/utils
 
   utils:
@@ -89,13 +60,9 @@ services:
       context: .
       dockerfile: services/utils/Dockerfile
     container_name: jtrack-utils
-    depends_on:
-      kafka:
-        condition: service_started
     env_file: .env
     environment:
       PORT: 6001
-      KAFKA_BROKER: kafka:9092
 
   nginx:
     build:

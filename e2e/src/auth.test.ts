@@ -5,6 +5,7 @@ import {
   registerUser,
   loginUser,
   registerAndLogin,
+  verifyUserEmail,
   changePassword,
 } from "./helpers.ts";
 import { generateRecruiter, generateJobseeker } from "./fixtures.ts";
@@ -16,8 +17,8 @@ describe("Auth Module", () => {
       const { status, body } = await registerUser(user);
 
       expect(status).toBe(201);
-      expect(body).toEqual({
-        message: "User registered successfully. Please login.",
+      expect(body).toMatchObject({
+        message: expect.stringContaining("User registered successfully"),
       });
     });
 
@@ -58,6 +59,7 @@ describe("Auth Module", () => {
     it("logs in with valid credentials and returns cookies", async () => {
       const user = generateRecruiter();
       await registerUser(user);
+      await verifyUserEmail(user);
 
       const res = await api.post<{ success: boolean; message: string; user: { user_id: number; name: string; email: string; role: string } }>(
         ENDPOINTS.AUTH.LOGIN,

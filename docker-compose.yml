@@ -1,5 +1,5 @@
 # Default: all services in Docker for development.
-# Includes redis, kafka, auth, user, jobservice, utils, nginx.
-# Runs everything in containers. No host services needed.
+# Includes redis, auth, user, jobservice, utils, nginx.
+# Kafka uses Confluent Cloud (configured via .env).
 include:
   - docker-compose.dev.yml

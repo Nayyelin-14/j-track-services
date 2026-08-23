@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { api, type ApiResponse } from "./client.ts";
 import { ENDPOINTS, type ServiceName } from "./config.ts";
-import { registerAndLogin } from "./helpers.ts";
+import { registerAndLogin, ensureResume } from "./helpers.ts";
 import { generateRecruiter, generateJobseeker, generateCompany, generateJob } from "./fixtures.ts";
 
 const jobs: ServiceName = "jobs";
@@ -26,6 +26,7 @@ interface JobResponse {
     title: string;
     company_id: number;
     is_active: boolean;
+    total_applications?: number;
   }>;
   message?: string;
 }
@@ -120,6 +121,84 @@ describe("Jobs Module", () => {
       expect(status).toBe(403);
       expect(body).toHaveProperty("message");
     });
+
+    it("lists recruiter's own companies", async () => {
+      const session = await registerAndLogin(generateRecruiter());
+      const company = generateCompany();
+
+      await api.post(
+        ENDPOINTS.JOBS.CREATE_COMPANY,
+        company,
+        session.cookies,
+        jobs,
+      );
+
+      const res = await api.get<CompanyResponse>(
+        ENDPOINTS.JOBS.MY_COMPANIES,
+        session.cookies,
+        jobs,
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.companies)).toBe(true);
+      expect(res.body.companies!.some((c) => c.name === company.name)).toBe(true);
+    });
+
+    it("prevents jobseeker from listing owned companies", async () => {
+      const session = await registerAndLogin(generateJobseeker());
+
+      const { status } = await api.get(
+        ENDPOINTS.JOBS.MY_COMPANIES,
+        session.cookies,
+        jobs,
+      );
+
+      expect(status).toBe(403);
+    });
+
+    it("recruiter updates their own company", async () => {
+      const session = await registerAndLogin(generateRecruiter());
+      const companyRes = await api.post<CompanyResponse>(
+        ENDPOINTS.JOBS.CREATE_COMPANY,
+        generateCompany(),
+        session.cookies,
+        jobs,
+      );
+      const companyId = companyRes.body.company!.company_id;
+
+      const res = await api.patch<CompanyResponse>(
+        ENDPOINTS.JOBS.UPDATE_COMPANY(companyId),
+        { name: `Renamed Co - E2E ${Date.now()}` },
+        session.cookies,
+        jobs,
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.company!.name).toMatch(/^Renamed Co - E2E/);
+    });
+
+    it("prevents updating another recruiter's company", async () => {
+      const owner = await registerAndLogin(generateRecruiter());
+      const companyRes = await api.post<CompanyResponse>(
+        ENDPOINTS.JOBS.CREATE_COMPANY,
+        generateCompany(),
+        owner.cookies,
+        jobs,
+      );
+      const companyId = companyRes.body.company!.company_id;
+
+      const intruder = await registerAndLogin(generateRecruiter());
+      const { status } = await api.patch(
+        ENDPOINTS.JOBS.UPDATE_COMPANY(companyId),
+        { name: "Hijacked Co" },
+        intruder.cookies,
+        jobs,
+      );
+
+      expect(status).toBe(403);
+    });
   });
 
   describe("Job CRUD", () => {
@@ -202,6 +281,49 @@ describe("Jobs Module", () => {
       expect(deleteRes.status).toBe(200);
       expect(deleteRes.body.success).toBe(true);
     });
+
+    it("lists recruiter's own jobs with application counts", async () => {
+      const session = await registerAndLogin(generateRecruiter());
+      const companyRes = await api.post<CompanyResponse>(
+        ENDPOINTS.JOBS.CREATE_COMPANY,
+        generateCompany(),
+        session.cookies,
+        jobs,
+      );
+      const companyId = companyRes.body.company!.company_id;
+
+      await api.post<JobResponse>(
+        ENDPOINTS.JOBS.CREATE_JOB,
+        { ...generateJob(), company_id: companyId },
+        session.cookies,
+        jobs,
+      );
+
+      const res = await api.get<JobResponse>(
+        ENDPOINTS.JOBS.MY_JOBS,
+        session.cookies,
+        jobs,
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.jobs)).toBe(true);
+      expect(res.body.jobs!.length).toBeGreaterThanOrEqual(1);
+      expect(res.body.jobs![0]).toHaveProperty("total_applications");
+      expect(typeof res.body.jobs![0].total_applications).toBe("number");
+    });
+
+    it("prevents jobseeker from listing owned jobs", async () => {
+      const session = await registerAndLogin(generateJobseeker());
+
+      const { status } = await api.get(
+        ENDPOINTS.JOBS.MY_JOBS,
+        session.cookies,
+        jobs,
+      );
+
+      expect(status).toBe(403);
+    });
   });
 
   describe("Application Flow", () => {
@@ -226,6 +348,7 @@ describe("Jobs Module", () => {
       const jobId = jobRes.body.job!.job_id;
 
       const jobseekerSession = await registerAndLogin(generateJobseeker());
+      await ensureResume(jobseekerSession);
 
       const applyRes = await api.post<ApplicationResponse>(
         ENDPOINTS.JOBS.APPLY,
@@ -282,6 +405,7 @@ describe("Jobs Module", () => {
       const jobId = jobRes.body.job!.job_id;
 
       const jobseekerSession = await registerAndLogin(generateJobseeker());
+      await ensureResume(jobseekerSession);
 
       await api.post(
         ENDPOINTS.JOBS.APPLY,
@@ -347,6 +471,7 @@ describe("Jobs Module", () => {
       const jobId = jobRes.body.job!.job_id;
 
       const jobseekerSession = await registerAndLogin(generateJobseeker());
+      await ensureResume(jobseekerSession);
       const applyRes = await api.post<ApplicationResponse>(
         ENDPOINTS.JOBS.APPLY,
         { jobId },
@@ -416,6 +541,7 @@ describe("Jobs Module", () => {
 
       // Jobseeker applies (triggers job.applied event)
       const jobseekerSession = await registerAndLogin(generateJobseeker());
+      await ensureResume(jobseekerSession);
       await api.post(
         ENDPOINTS.JOBS.APPLY,
         { jobId },
@@ -488,6 +614,7 @@ describe("Jobs Module", () => {
       const jobId = jobRes.body.job!.job_id;
 
       const jobseekerSession = await registerAndLogin(generateJobseeker());
+      await ensureResume(jobseekerSession);
       const { status } = await api.get(
         ENDPOINTS.JOBS.ANALYTICS(jobId),
         jobseekerSession.cookies,

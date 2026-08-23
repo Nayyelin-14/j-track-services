@@ -21,10 +21,17 @@ const jobDetailsSchema = z.object({
 
 export const analyzeMatchSchema = z.object({
   resumeUrl: z.string().url("Invalid resume URL"),
+  model: z
+    .string()
+    .min(1)
+    .max(200)
+    .regex(/^[\w.:/-]+$/, "Invalid model identifier")
+    .optional(),
   job: z.object({
     title: z.string().min(1, "Job title is required"),
     description: z.string().min(1, "Job description is required"),
-    salary: z.union([z.number(), z.null()]).optional(),
+    // Salary may be a number, a numeric string, or a "min-max" range string
+    salary: z.union([z.number(), z.string().max(64), z.null()]).optional(),
     location: z.string().optional(),
     job_type: z.string().optional(),
     work_location: z.string().optional(),

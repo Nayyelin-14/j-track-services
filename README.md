@@ -64,7 +64,14 @@ A pnpm monorepo powering a job marketplace with JWT-authenticated REST APIs, AI-
 | **Synchronous** | HTTP REST (internal) | Auth/User/Job → Utils for file uploads & AI analysis via `UTILS_SERVICE_URL` |
 | **Asynchronous** | Apache Kafka | Auth/Job → `send-mail` topic → Utils consumer → Nodemailer SMTP |
 | **Event-driven** | Apache Kafka | Job service → `job-events` topic → analytics consumer (DB aggregation) + notification consumer (recruiter alerts) |
-| **Shared Library** | `@jtrack/shared` workspace package | Database client, JWT utilities, auth middleware, error handling, Kafka/Redis helpers |
+| **Shared Library** | `@jtrack/shared` workspace package | Database client, JWT utilities, auth middleware, error handling, Kafka/Redis eventing helpers |
+
+> **Kafka eventing architecture**: transactional outbox, event envelopes,
+> idempotent consumers (`consumer_dedup`), consumer-side retry → DLQ → replay,
+> correlation IDs, and per-aggregate partitioning. See
+> **[`docs/kafka-architecture.md`](docs/kafka-architecture.md)** for the full guide
+> and **[`docs/kafka-schema-evolution.md`](docs/kafka-schema-evolution.md)** (Phase 11)
+> for format compatibility.
 
 ---
 
@@ -172,7 +179,8 @@ Authentication gateway — registration, login, password management.
 | `/api/auth/forgot-password` | POST | No | Sends reset email via Kafka |
 | `/api/auth/reset-password/:token` | POST | No | Reset password with token |
 | `/api/auth/change-password` | PATCH | Yes | Change password (requires current password) |
-| `/health` | GET | No | Health check (DB, Redis, Kafka) |
+| `/health` | GET | No | Liveness: process alive (always 200) |
+| `/health/ready` | GET | No | Readiness: DB + Redis + Kafka connected (200/503) |
 
 ### User Service (`:7001`)
 
@@ -189,7 +197,7 @@ Profile and skills management.
 | `/api/users/add-skill` | POST | Yes | Add skill to profile |
 | `/api/users/remove-skill` | DELETE | Yes | Remove skill |
 | `/api/users/skills` | GET | No | All available skills |
-| `/health` | GET | No | Health check |
+| `/health` | GET | No | Liveness: process alive (always 200) |
 
 ### Job Service (`:7002`)
 
@@ -200,12 +208,15 @@ Companies, jobs, applications, and match analysis.
 | `/api/jobs/create-com` | POST | Yes | Create company (with logo upload) |
 | `/api/jobs/` | GET | No | List all companies |
 | `/api/jobs/:company_id` | GET | No | Get company by ID |
+| `/api/jobs/:company_id` | PATCH | Yes | Update owned company (name/description/website/logo) |
 | `/api/jobs/detail/:company_id` | GET | Yes | Get company with all job listings |
+| `/api/jobs/my-companies` | GET | Yes | Recruiter's owned companies |
 | `/api/jobs/:id` | DELETE | Yes | Delete company |
 | `/api/jobs/create-job` | POST | Yes | Create job listing |
 | `/api/jobs/jobs/:job_id` | PATCH | Yes | Update job listing |
 | `/api/jobs/jobs/:job_id` | DELETE | Yes | Delete job listing |
 | `/api/jobs/active-jobs` | GET | No | All active job listings |
+| `/api/jobs/my-jobs` | GET | Yes | Recruiter's jobs (with application counts) |
 | `/api/jobs/jobs/:job_id` | GET | No | Job detail |
 | `/api/jobs/apply` | POST | Yes | Apply to job (SSE response) |
 | `/api/jobs/my-applications` | GET | Yes | User's applications |
@@ -213,7 +224,8 @@ Companies, jobs, applications, and match analysis.
 | `/api/jobs/applications/:application_id` | PATCH | Yes | Update application status |
 | `/api/jobs/analyze-match/:jobId` | POST | Yes | SSE match analysis (internally calls Utils) |
 | `/api/jobs/analytics/:job_id` | GET | Yes | Recruiter dashboard: daily views, applications, status changes |
-| `/health` | GET | No | Health check (DB, Redis, Kafka) |
+| `/health` | GET | No | Liveness: process alive (always 200) |
+| `/health/ready` | GET | No | Readiness: analytics consumer + DB + Redis + Kafka (200/503) |
 
 ### Utils Service (`:6001`)
 
@@ -230,7 +242,11 @@ AI-powered utilities, file storage, email delivery.
 
 **Kafka consumers:**
 - `mail-service-group` — listens on `send-mail` topic → sends email via Nodemailer. Failed deliveries routed to `send-mail-dlq`.
-- `notification-group` — listens on `job-events` topic → sends new application alerts to recruiters.
+- `notification-group` — listens on `job-events` topic → sends new application alerts to recruiters. Failures routed to `job-events-dlq`.
+
+All consumers run the shared `createConsumer` pipeline: envelope normalization →
+correlation context → idempotency check → handler → retry with backoff → DLQ →
+metrics. See **[`docs/kafka-architecture.md`](docs/kafka-architecture.md)**.
 
 ---
 
@@ -370,6 +386,30 @@ Create a `.env` file at the project root based on `.env.example`:
 | `KAFKA_MAIL_TOPIC` | No | Utils | `send-mail` |
 | `KAFKA_DLQ_TOPIC` | No | Utils | `send-mail-dlq` |
 | `MAIL_SEND_RETRIES` | No | Utils | `3` |
+| `KAFKA_JOB_EVENTS_TOPIC` | No | Job, Utils | `job-events` |
+| `KAFKA_ANALYTICS_GROUP` | No | Job | `job-analytics-group` |
+| `KAFKA_ANALYTICS_DLQ_TOPIC` | No | Job | `job-events-dlq` |
+| `KAFKA_NOTIFICATION_GROUP` | No | Utils | `notification-group` |
+| `KAFKA_NOTIFICATION_DLQ_TOPIC` | No | Utils | `job-events-dlq` |
+| `OUTBOX_POLL_INTERVAL_MS` | No | Job | `1000` |
+| `OUTBOX_BATCH_SIZE` | No | Job | `10` |
+| `OUTBOX_MAX_ATTEMPTS` | No | Job | `5` |
+| `OUTBOX_PROCESSING_TIMEOUT_MS` | No | Job | `30000` |
+| `OUTBOX_SWEEP_INTERVAL_MS` | No | Job | `15000` |
+| `OUTBOX_RETRY_BASE_MS` / `OUTBOX_RETRY_MAX_MS` | No | Job | `1000` / `60000` |
+| `KAFKA_CONSUMER_MAX_ATTEMPTS` | No | Job, Utils | `3` |
+| `KAFKA_CONSUMER_RETRY_BASE_MS` / `KAFKA_CONSUMER_RETRY_MAX_MS` | No | Job, Utils | `1000` / `15000` |
+| `KAFKA_DLQ_PUBLISH_RETRIES` | No | All consumers | `3` (transient DLQ-write retries) |
+| `KAFKA_TOPIC_REPLICATION_FACTOR` | No | Auth, Job, Utils | — (omit; broker default used. Set only for self-managed multi-broker Kafka) |
+
+### Security
+
+`.env` is git-ignored and never committed (see `.gitignore`). Secrets live only in
+`.env` locally / env vars in Docker Compose. **Rotate credentials regularly**:
+Kafka SASL credentials, `JWT_*` secrets, `DB_URL`, Cloudinary keys, and SMTP
+credentials are all plain text in `.env` — rotate by editing the file (and the
+Compose env / Confluent Cloud settings) and restarting the services. Never log or
+echo the contents of `.env`.
 
 ### Ports
 
@@ -441,13 +481,23 @@ Reusable modules consumed by all services via `"@jtrack/shared": "workspace:*"`:
 | `errorHandler` | `ErrorHandler` class, `errorMiddleware` | Custom errors with status codes |
 | `tryCatch` | `TryCatch` | Express async error wrapper |
 | `isauthenticated` | `isAuthenticated` | JWT verification + auto-refresh middleware |
-| `kafka/producer` | `getKafkaProducer` | Kafka producer singleton |
+| `kafka/producer` | `getKafkaProducer` | Kafka producer singleton (auto-envelopes, idempotent) |
+| `kafka/outbox` | `enqueueOutboxEvent`, `claimOutboxBatch`, `processClaimed`, `sweepStaleClaims`, `startOutboxWorker`, `findOutboxEvents`, `resetOutboxEvents` | Transactional outbox (atomic DB write + event publish) + ops tooling |
+| `kafka/validation` | `validateEventEnvelope`, `EVENT_VALIDATORS` | Event schema/version validation → DLQ (non-retryable) |
+| `kafka/envelope` | `wrapInEnvelope`, `normalizeKafkaMessage`, `isEnvelope` | Event envelope + legacy-tolerant parsing |
+| `kafka/consumer-factory` | `createConsumer` | Shared consumer pipeline (normalize → correlation → retry → DLQ → metrics) |
+| `kafka/idempotency` | `markProcessed`, `markProcessedInTx`, `isAlreadyProcessed`, `pruneProcessedRecords` | `consumer_dedup` guards |
+| `kafka/dlq` | `runWithRetryAndDlq`, `publishToDLQ`, `isRetryableError`, `NonRetryableError` | Retry/backoff + dead-letter |
+| `kafka/replay` | `replayFromDlq`, `parseDlqMessage` | DLQ replay CLI logic |
+| `kafka/correlation` | `runWithCorrelation`, `getCorrelationId`, `correlationMiddleware` | AsyncLocalStorage correlation IDs |
+| `kafka/partitioning` | `jobPartitionKey`, `applicantPartitionKey` | Per-aggregate partition keys |
+| `kafka/metrics` | `getMetrics`, `KafkaMetrics` | In-process Kafka counters |
 | `kafka/topic` | `ensureTopic`, `listTopics` | Topic management |
-| `kafka/types` | `MailMessage`, `KafkaHealth`, `ProducerInstance` | Type definitions |
+| `kafka/types` | `MailMessage`, `KafkaHealth`, `ProducerInstance`, `ConsumerInstance` | Type definitions |
 | `kafka/config` | `resolveKafkaConfig`, `sleep` | Shared Kafka config builder |
-| `kafka/consumer` | `checkKafkaHealth` | Consumer health check helper |
+| `kafka/consumer` | `checkKafkaHealth`, `getConsumerLag` | Health check + real broker consumer-lag helpers |
 | `redis/helpers` | `createRedisHelpers` | Generic Redis get/set/delete + rate limiting |
-| `migrate` | `runMigrationsWithLock` | Runs `prisma migrate deploy` at service startup |
+| `migrate` | `runMigrationsWithLock` | Runs `prisma migrate deploy` at auth-service startup under a transaction-scoped Postgres advisory lock with bounded wait |
 
 ---
 
@@ -455,13 +505,19 @@ Reusable modules consumed by all services via `"@jtrack/shared": "workspace:*"`:
 
 - **HTTP-only cookies for JWT** — access and refresh tokens stored in secure, httpOnly, sameSite cookies. Prevents XSS token exfiltration. Access token auto-refreshes via `isAuthenticated` middleware when expired but refresh token is valid.
 - **SSE for AI responses** — career guidance, match analysis, and resume scoring stream tokens in real-time via Server-Sent Events rather than blocking on long-running AI inference.
-- **Kafka for event-driven analytics** — job views, applications, and status changes are published as structured events to the `job-events` topic. Two independent consumer groups process the same stream: the analytics consumer (job service) upserts daily counts into `job_analytics` via Prisma, and the notification consumer (utils service) sends real-time recruiter alerts.
+- **Kafka for event-driven analytics** — job views, applications, and status changes are published as envelope-wrapped events to `job-events` (via a transactional outbox). Two independent consumer groups process the same stream: the analytics consumer (job service) upserts daily counts into `job_analytics` inside a dedup transaction, and the notification consumer (utils service) sends real-time recruiter alerts. Emails are sent by the utils `mail-service-group` consumer on `send-mail`. Delivery is **at-least-once** made safe by `consumer_dedup` idempotency keys; failed processing retries with backoff then lands in a DLQ for `pnpm kafka:replay`.
 - **Internal service HTTP calls** — auth, user, and job services call the utils service directly for file uploads and AI analysis. The utils service does not expose auth middleware externally, relying on network-level isolation. Endpoints are rate-limited instead.
 - **pnpm workspaces** — strict dependency isolation with the `.pnpm` virtual store. Dependencies are deduplicated and hoisted only as configured via `.npmrc`.
 - **Redis caching** — user profiles cached for 5 minutes; active jobs and job details cached with TTL. Cache invalidation on writes.
+- **Redis fails open (deliberate trade-off)** — all Redis-backed rate limiting (`checkForgotPasswordRate`, `trackFailedResetAttempt`) and caching degrade gracefully: when Redis is unavailable, requests are allowed and cache reads fall through to the database. Rationale:
+  - Failing closed would let a Redis outage deny password-reset flows to *every* user — an availability failure worse than the abuse it prevents.
+  - Layered defenses remain during an outage: express-rate-limit IP limits are in-memory and unaffected by Redis; reset tokens are hashed, single-use, high-entropy, and short-lived, so losing per-token attempt throttling does not enable practical brute force.
+  - Accepted residual risk: during a Redis outage, per-email/per-token limits are unenforced (e.g. repeated forgot-password emails). Mitigated by email-provider throttling and by alerting on `[Redis] Rate limit check failed` log errors.
+  - Do **not** "fix" this by failing closed without revisiting the availability impact above.
 - **Prisma ORM with raw escape hatches** — the monorepo migrated from raw `pg` SQL to Prisma for auto-generated migrations, type-safe queries, and schema management. ~60 of ~72 queries use Prisma's generated client; the remaining 12 use `$queryRaw` for PostgreSQL-specific features (JSON aggregates, full-text search, COALESCE sums) that don't map cleanly to Prisma's query API.
 - **tsvector full-text search** — `users` and `companies` tables have `search_vector tsvector` columns updated by PL/pgSQL triggers on INSERT/UPDATE, with GIN indexes for efficient search. The Prisma schema uses `Unsupported("tsvector")` for these columns.
 - **Single CI pipeline** — everything runs on PR only (including docker build and push). No redundant pipeline on merge. Critical e2e smoke test on every PR prevents merge of broken cross-service flows.
+- **Single-migrator startup** — only the auth service runs `prisma migrate deploy` at boot (`runMigrationsWithLock`); user/job/utils start without touching migration history, so starting all services together creates no migration contention. The deploy itself is guarded by a transaction-scoped Postgres advisory lock (`pg_try_advisory_xact_lock`, bounded wait, auto-released on commit/rollback) so even concurrent cold starts of multiple auth replicas — or any future service adopting `initDB` — serialize safely instead of racing inside Prisma migrate. Safe through PgBouncer/Neon pooler transaction mode because all statements of one transaction share a server session.
 
 ---
 
@@ -505,6 +561,9 @@ j-track-services/
 │   │   └── helpers.ts           # Auth helpers (register, login)
 │   ├── vitest.config.ts
 │   └── package.json
+├── scripts/
+│   ├── kafka-replay.ts          # DLQ replay CLI (pnpm kafka:replay)
+│   └── outbox.ts                # Outbox inspect/retry CLI (pnpm outbox)
 ├── nginx/                       # Reverse proxy config
 │   ├── Dockerfile
 │   ├── Dockerfile.prod
@@ -528,7 +587,21 @@ j-track-services/
 │       │   ├── migrate.ts        # Runs prisma migrate deploy at startup
 │       │   ├── redis/helpers.ts
 │       │   └── kafka/
+│       │       ├── producer.ts       # Auto-enveloping idempotent producer
+│       │       ├── outbox.ts         # Transactional outbox + worker
+│       │       ├── consumer-factory.ts # Shared consumer pipeline
+│       │       ├── envelope.ts       # Envelope wrap/parse (legacy-tolerant)
+│       │       ├── validation.ts     # Event schema/version validation → DLQ
+│       │       ├── idempotency.ts    # consumer_dedup guards
+│       │       ├── dlq.ts            # Retry/backoff + dead-letter publish
+│       │       ├── replay.ts         # DLQ replay logic
+│       │       ├── correlation.ts    # AsyncLocalStorage correlation IDs
+│       │       ├── partitioning.ts   # Per-aggregate partition keys
+│       │       └── metrics.ts        # In-process metric counters
 │       └── tsconfig.json
+├── docs/
+│   ├── kafka-architecture.md   # Full Kafka architecture guide (Phase 14)
+│   └── kafka-schema-evolution.md # Envelope/format compatibility (Phase 11)
 ├── services/
 │   ├── auth/                    # Authentication service
 │   ├── user/                    # Profile & skills service
@@ -548,9 +621,16 @@ j-track-services/
 
 | Topic | Producer | Consumer | Purpose |
 |-------|----------|----------|---------|
-| `send-mail` | Auth, Job | Utils (mail-service-group) | Password resets, application status |
-| `send-mail-dlq` | Utils | — | Dead-letter queue for failed sends |
+| `send-mail` | Auth | Utils (mail-service-group) | Password resets, verification emails |
+| `send-mail-dlq` | Utils (DLQ) | — (replay CLI) | Dead-letter queue for failed sends |
 | `job-events` | Job | Job (job-analytics-group), Utils (notification-group) | Job view/app/status tracking, recruiter alerts |
+| `job-events-dlq` | Job, Utils (DLQ) | — (replay CLI) | Dead-letter queue for failed job-event processing |
+
+Replay a DLQ topic (preserves `eventId`, so consumers deduplicate on replay):
+
+```bash
+pnpm kafka:replay --dlq-topic job-events-dlq --consumer-id job-analytics --limit 500
+```
 
 ---
 

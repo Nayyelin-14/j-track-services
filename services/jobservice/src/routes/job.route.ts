@@ -7,6 +7,8 @@ import {
   getAllCompanies,
   getCompanyById,
   getCompanyDetail,
+  getMyCompanies,
+  updateCompany,
 } from "../controllers/companies.controller.js";
 import {
   createJob,
@@ -14,6 +16,7 @@ import {
   updateJob,
   getAllActiveJobs,
   getJobById,
+  getMyJobs,
 } from "../controllers/jobs.controller.js";
 import {
   applyJob,
@@ -38,9 +41,12 @@ router.post(
 );
 router.get("/active-jobs", getAllActiveJobs);
 router.get("/my-applications", isAuthenticated, getApplications);
+router.get("/my-jobs", isAuthenticated, getMyJobs);
+router.get("/my-companies", isAuthenticated, getMyCompanies);
 router.get("/", getAllCompanies);
 router.get("/:company_id", getCompanyById);
 router.get("/detail/:company_id", isAuthenticated, getCompanyDetail);
+router.patch("/:company_id", isAuthenticated, upload.single("logo"), updateCompany);
 router.delete("/:id", isAuthenticated, deleteCompany);
 
 router.post("/create-job", isAuthenticated, createJob);

@@ -43,43 +43,47 @@ describe("analyzeJobMatch", () => {
 
   it("throws 401 without user", async () => {
     const res = mockRes();
-    await MODULES.analyzeJobMatch(mockReq(), res);
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ success: false, message: expect.any(String) });
+    await expect(MODULES.analyzeJobMatch(mockReq(), res)).rejects.toMatchObject({
+      statusCode: 401,
+    });
   });
 
   it("throws 403 if not jobseeker", async () => {
     const res = mockRes();
-    await MODULES.analyzeJobMatch(mockReq({ user: { role: "recruiter" } }), res);
-    expect(res.status).toHaveBeenCalledWith(403);
+    await expect(
+      MODULES.analyzeJobMatch(mockReq({ user: { role: "recruiter" } }), res),
+    ).rejects.toMatchObject({ statusCode: 403 });
   });
 
   it("throws 400 for invalid job id", async () => {
     const res = mockRes();
-    await MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 1 }, params: { jobId: "abc" } }), res);
-    expect(res.status).toHaveBeenCalledWith(400);
+    await expect(
+      MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 1 }, params: { jobId: "abc" } }), res),
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it("throws 404 if user not found", async () => {
     mockUserFindFirst.mockResolvedValueOnce(null);
     const res = mockRes();
-    await MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 999 }, params: { jobId: "1" } }), res);
-    expect(res.status).toHaveBeenCalledWith(404);
+    await expect(
+      MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 999 }, params: { jobId: "1" } }), res),
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("throws 400 if user has no resume", async () => {
     mockUserFindFirst.mockResolvedValueOnce({ resume: null });
     const res = mockRes();
-    await MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 1 }, params: { jobId: "1" } }), res);
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({ success: false, message: expect.stringMatching(/resume/i) });
+    await expect(
+      MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 1 }, params: { jobId: "1" } }), res),
+    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/resume/i) });
   });
 
   it("throws 404 if job not found", async () => {
     mockUserFindFirst.mockResolvedValueOnce({ resume: "https://cloudinary.com/r.pdf" });
     mockJobFindFirst.mockResolvedValueOnce(null);
     const res = mockRes();
-    await MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 1 }, params: { jobId: "999" } }), res);
-    expect(res.status).toHaveBeenCalledWith(404);
+    await expect(
+      MODULES.analyzeJobMatch(mockReq({ user: { role: "jobseeker", user_id: 1 }, params: { jobId: "999" } }), res),
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 });

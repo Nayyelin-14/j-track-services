@@ -84,7 +84,7 @@ async function seed() {
     {
       title: "Senior Software Engineer",
       description: "Build scalable microservices using Node.js and TypeScript. Lead architecture decisions.",
-      salary: 145000, location: "San Francisco, CA", job_type: "Full_time" as const,
+      salary: "145000", location: "San Francisco, CA", job_type: "Full_time" as const,
       openings: 3, role: "Backend", work_location: "Remote" as const,
       company_id: companies[0].company_id, posted_by_recruiter_id: recruiters[0].user_id, is_active: true,
       details: {
@@ -108,7 +108,7 @@ async function seed() {
     {
       title: "Product Manager",
       description: "Drive product roadmap for our flagship SaaS platform. Work with eng, design, and sales.",
-      salary: 135000, location: "New York, NY",       job_type: "Full_time" as const,
+      salary: "135000", location: "New York, NY",       job_type: "Full_time" as const,
       openings: 1, role: "Product", work_location: "Hybrid" as const,
       company_id: companies[0].company_id, posted_by_recruiter_id: recruiters[0].user_id, is_active: true,
       details: {
@@ -132,7 +132,7 @@ async function seed() {
     {
       title: "Frontend Developer",
       description: "Develop responsive web apps using React and Next.js. Collaborate closely with UX team.",
-      salary: 115000, location: "Austin, TX", job_type: "Full_time" as const,
+      salary: "115000", location: "Austin, TX", job_type: "Full_time" as const,
       openings: 2, role: "Frontend", work_location: "Remote" as const,
       company_id: companies[1].company_id, posted_by_recruiter_id: recruiters[1].user_id, is_active: true,
       details: {
@@ -156,7 +156,7 @@ async function seed() {
     {
       title: "DevOps Engineer",
       description: "Manage CI/CD pipelines, Kubernetes clusters, and AWS infrastructure.",
-      salary: 140000, location: "Seattle, WA", job_type: "Contract" as const,
+      salary: "140000", location: "Seattle, WA", job_type: "Contract" as const,
       openings: 2, role: "DevOps", work_location: "On_site" as const,
       company_id: companies[1].company_id, posted_by_recruiter_id: recruiters[1].user_id, is_active: true,
       details: {
@@ -180,7 +180,7 @@ async function seed() {
     {
       title: "Data Analyst",
       description: "Analyze business metrics and build dashboards. SQL and Python expertise required.",
-      salary: 105000, location: "Chicago, IL", job_type: "Full_time" as const,
+      salary: "105000", location: "Chicago, IL", job_type: "Full_time" as const,
       openings: 2, role: "Data", work_location: "Hybrid" as const,
       company_id: companies[2].company_id, posted_by_recruiter_id: recruiters[0].user_id, is_active: true,
       details: {
@@ -204,7 +204,7 @@ async function seed() {
     {
       title: "UI/UX Designer",
       description: "Create intuitive user interfaces and design systems for web and mobile products.",
-      salary: 110000, location: "Los Angeles, CA", job_type: "Full_time" as const,
+      salary: "110000", location: "Los Angeles, CA", job_type: "Full_time" as const,
       openings: 1, role: "Design", work_location: "Remote" as const,
       company_id: companies[0].company_id, posted_by_recruiter_id: recruiters[0].user_id, is_active: true,
       details: {
@@ -228,7 +228,7 @@ async function seed() {
     {
       title: "Mobile Developer (iOS)",
       description: "Build native iOS applications using Swift. Experience with SwiftUI is a plus.",
-      salary: 130000, location: "Miami, FL", job_type: "Full_time" as const,
+      salary: "130000", location: "Miami, FL", job_type: "Full_time" as const,
       openings: 2, role: "Mobile", work_location: "On_site" as const,
       company_id: companies[2].company_id, posted_by_recruiter_id: recruiters[0].user_id, is_active: true,
       details: {
@@ -252,7 +252,7 @@ async function seed() {
     {
       title: "QA Automation Engineer",
       description: "Develop end-to-end test suites using Cypress and Playwright.",
-      salary: 120000, location: "Denver, CO", job_type: "Contract" as const,
+      salary: "120000", location: "Denver, CO", job_type: "Contract" as const,
       openings: 1, role: "QA", work_location: "Remote" as const,
       company_id: companies[1].company_id, posted_by_recruiter_id: recruiters[1].user_id, is_active: false,
       details: {

@@ -34,6 +34,7 @@ export const analyzeMatch = async (req: Request, res: Response): Promise<void> =
       job,
       res,
       signal,
+      input.model,
     );
   } catch (error) {
     if (signal.aborted) return;

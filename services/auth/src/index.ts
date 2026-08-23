@@ -1,4 +1,8 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import { resolve } from "node:path";
+
+dotenv.config({ path: resolve(process.cwd(), "../../.env") });
+
 import app from "./app.js";
 import { prisma } from "@jtrack/shared/db";
 import { redisClient } from "./redis.js";
@@ -24,16 +28,24 @@ async function connectRedis() {
   }
 }
 
-app.get("/health", async (_req, res) => {
+app.get("/health", (_req, res) => {
+  res.status(200).json({
+    service: "auth-service",
+    status: "ok",
+    uptime: process.uptime(),
+  });
+});
+
+app.get("/health/ready", async (_req, res) => {
   const health = await kafka.healthCheck();
   const dbOk = await prisma.$queryRaw`SELECT 1`.catch(() => null);
   const redisOk = redisClient.isOpen;
 
-  const status = health.connected && dbOk && redisOk ? "healthy" : "degraded";
+  const ready = health.connected && dbOk && redisOk;
 
-  res.status(status === "healthy" ? 200 : 503).json({
+  res.status(ready ? 200 : 503).json({
     service: "auth-service",
-    status,
+    status: ready ? "ready" : "not_ready",
     kafka: health,
     database: dbOk ? "connected" : "disconnected",
     redis: redisOk ? "connected" : "disconnected",
