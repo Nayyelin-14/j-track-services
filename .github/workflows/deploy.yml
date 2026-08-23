@@ -3,10 +3,20 @@ name: Deploy
 on:
   push:
     branches: [main]
+  # Manual re-publish path: recover a failed publish for the current main
+  # without waiting for a new merge.
+  workflow_dispatch:
+  # Weekly full rebuild so images pick up base-image/OS/security updates
+  # even when application code is unchanged (path filtering alone would
+  # let images age indefinitely).
+  schedule:
+    - cron: "30 3 * * 1"
 
 concurrency:
+  # Publish line must SERIALIZE, never cancel: concurrent merges queue so
+  # every merged SHA gets fully published (no half-pushed :latest windows).
   group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -37,22 +47,46 @@ jobs:
         id: filter
         with:
           filters: |
+            # Root dependency files affect EVERY service image — a lockfile-only
+            # merge must rebuild all four, not publish nothing.
             auth:
               - 'services/auth/**'
               - 'packages/shared/**'
+              - 'pnpm-lock.yaml'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - '.npmrc'
             user:
               - 'services/user/**'
               - 'packages/shared/**'
+              - 'pnpm-lock.yaml'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - '.npmrc'
             jobservice:
               - 'services/jobservice/**'
               - 'packages/shared/**'
+              - 'pnpm-lock.yaml'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - '.npmrc'
             utils:
               - 'services/utils/**'
               - 'packages/shared/**'
+              - 'pnpm-lock.yaml'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - '.npmrc'
 
       - name: Build dynamic matrix
         id: set-matrix
         run: |
+          # workflow_dispatch (re-publish) and schedule (weekly rebuild) always
+          # publish the full set — paths-filter has no diff base on those events.
+          if [[ "${{ github.event_name }}" != "push" ]]; then
+            echo "services=[\"auth\",\"user\",\"jobservice\",\"utils\"]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           services='[]'
           if [[ '${{ steps.filter.outputs.auth }}' == 'true' ]]; then
             services=$(echo "$services" | jq -c '. + ["auth"]')
@@ -136,6 +170,10 @@ jobs:
         id: reg
         run: echo "base=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
+      - name: Record image creation time
+        id: meta
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
@@ -144,6 +182,10 @@ jobs:
           tags: |
             ${{ steps.reg.outputs.base }}/${{ matrix.service }}:${{ github.sha }}
             ${{ steps.reg.outputs.base }}/${{ matrix.service }}:latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
           push: true
           cache-from: type=registry,ref=${{ steps.reg.outputs.base }}/${{ matrix.service }}:cache
           cache-to: type=registry,ref=${{ steps.reg.outputs.base }}/${{ matrix.service }}:cache,mode=max
@@ -192,3 +234,58 @@ jobs:
           image-ref: ${{ steps.reg.outputs.base }}/${{ matrix.service }}:${{ github.sha }}
           exit-code: 0
           severity: CRITICAL,HIGH
+
+  # Capture successful main-branch publications in the external Changelog
+  # Composer (POST {runId, project, repo}; the Composer fetches run data itself).
+  #
+  # - push events ONLY: weekly security rebuilds (schedule) and manual
+  #   re-publishes (workflow_dispatch) are deliberately NOT reported.
+  # - docs-only merges (empty build matrix → docker-build skipped) ARE valid
+  #   successful main pushes and are captured.
+  # - Failed/cancelled publications are NEVER captured.
+  # - Warning-only: a dead Composer must never fail an image publication.
+  #   Re-running a fixed publish re-POSTs the same run_id, which the Composer
+  #   treats idempotently (overwrite, not duplicate).
+  # - No repo writes here → structurally incapable of triggering loops.
+  changelog:
+    name: Report run to Changelog Composer
+    needs: [docker-build]
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      needs.docker-build.result != 'failure' &&
+      needs.docker-build.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST run to Changelog Composer
+        env:
+          COMPOSER_URL: ${{ secrets.COMPOSER_URL }}
+          COMPOSER_TOKEN: ${{ secrets.COMPOSER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$COMPOSER_URL" ] || [ -z "$COMPOSER_TOKEN" ]; then
+            echo "::warning::COMPOSER_URL / COMPOSER_TOKEN secrets not configured — skipping changelog capture"
+            exit 0
+          fi
+
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY##*/}"
+
+          http=$(curl -sS -o /tmp/composer-response.json -w '%{http_code}' \
+            -X POST "$COMPOSER_URL" \
+            -H "Authorization: Bearer $COMPOSER_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --argjson runId "$GITHUB_RUN_ID" \
+              --arg project "$OWNER" \
+              --arg repo "$REPO" \
+              '{runId: $runId, project: $project, repo: $repo}')"
+          ) || http=000
+
+          if [ "$http" != "200" ]; then
+            echo "::warning::Changelog Composer unreachable (HTTP $http) — run not captured; publication is unaffected"
+            exit 0
+          fi
+
+          pr_count=$(jq -r '.prCount // 0' /tmp/composer-response.json)
+          echo "✓ Run $GITHUB_RUN_ID captured by Changelog Composer ($pr_count PRs)"

@@ -35,7 +35,15 @@ jobs:
         run: docker compose -f docker-compose.dev.yml config
 
       - name: Validate prod docker-compose syntax
-        run: docker compose -f docker-compose.prod.yml config
+        # Prod compose requires explicit image tags (no :latest fallback) —
+        # supply dummies purely for syntax validation.
+        run: |
+          GHCR_REPO=ghcr.io/example/jtrack \
+          AUTH_TAG=0000000000000000000000000000000000000000 \
+          USER_TAG=0000000000000000000000000000000000000000 \
+          JOBSERVICE_TAG=0000000000000000000000000000000000000000 \
+          UTILS_TAG=0000000000000000000000000000000000000000 \
+          docker compose -f docker-compose.prod.yml config
 
       - name: Create dummy SSL certs for nginx validation
         run: |
@@ -190,6 +198,34 @@ jobs:
           name: coverage-${{ matrix.service }}
           path: services/${{ matrix.service }}/coverage/
 
+  # Prove each changed service can actually produce its Docker image.
+  # Validation ONLY: never pushes, never touches the production GHCR
+  # namespace, requires no secrets (fork-PR safe). Uses a PR-scoped GHA
+  # cache so untrusted PR builds cannot poison the official build cache
+  # (which lives in the registry under deploy.yml's own scope).
+  docker-validate:
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (validation only — no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: false
+          cache-from: type=gha,scope=prbuild-${{ matrix.service }}
+          cache-to: type=gha,scope=prbuild-${{ matrix.service }},mode=max
+
   smoke-e2e:
     if: needs.changes.outputs.e2e == 'true'
     needs: [changes, build]
@@ -277,6 +313,7 @@ jobs:
       - infra-check
       - audit
       - build
+      - docker-validate
     runs-on: ubuntu-latest
     steps:
       - name: Check results
@@ -292,6 +329,7 @@ jobs:
           check infra-check "${{ needs.infra-check.result }}"
           check audit "${{ needs.audit.result }}"
           check build "${{ needs.build.result }}"
+          check docker-validate "${{ needs.docker-validate.result }}"
           if [[ -n "$failed" ]]; then
             echo "CI failed on:$failed"
             exit 1
