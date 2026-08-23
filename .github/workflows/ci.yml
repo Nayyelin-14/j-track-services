@@ -21,6 +21,12 @@ env:
   JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
   JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
   JWT_RESET_SECRET: ${{ secrets.JWT_RESET_SECRET }}
+  # Needed by smoke-e2e: the resume-upload flow exercises a real Cloudinary
+  # upload through the utils service. Without these, utils rejects uploads
+  # and the user service surfaces it as 502.
+  CLOUD_NAME: ${{ secrets.CLOUD_NAME }}
+  CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY }}
+  CLOUD_API_SECRET: ${{ secrets.CLOUD_API_SECRET }}
 
 jobs:
   infra-check:
