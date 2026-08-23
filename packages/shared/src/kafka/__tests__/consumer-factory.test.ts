@@ -433,3 +433,59 @@ describe("consumer readiness semantics (hardening)", () => {
     await consumer.stop();
   });
 });
+describe("consumer startup resilience (cold-start topic propagation)", () => {
+  it("retries subscribe when a fresh topic is not yet visible on all brokers", async () => {
+    let attempts = 0;
+    const state: FakeKafkaState = { handlers: [], crashListeners: [] };
+    const consumerInner = {
+      ...makeFakeConsumer(state),
+      async subscribe(_: unknown) {
+        attempts += 1;
+        if (attempts < 3) {
+          throw new Error("This server does not host this topic-partition");
+        }
+      },
+    };
+    const kafka = { consumer: () => consumerInner, producer: () => ({ async connect() {}, async send() {}, async disconnect() {} }) };
+    const logSpy = vi.fn();
+    const consumer = createConsumer({
+      clientId: "t",
+      groupId: "g",
+      consumerId: "c",
+      topics: ["send-mail"],
+      handler: async () => {},
+      kafka: kafka as never,
+      log: logSpy,
+    });
+
+    await consumer.start();
+    expect(attempts).toBe(3);
+    expect(logSpy.mock.calls.some((c: unknown[]) => String(c[1]).includes("Topic subscription failed"))).toBe(true);
+    await consumer.stop();
+  });
+
+  it("gives up after max attempts and surfaces the error", { timeout: 30_000 }, async () => {
+    let attempts = 0;
+    const state: FakeKafkaState = { handlers: [], crashListeners: [] };
+    const consumerInner = {
+      ...makeFakeConsumer(state),
+      async subscribe(_: unknown) {
+        attempts += 1;
+        throw new Error("This server does not host this topic-partition");
+      },
+    };
+    const kafka = { consumer: () => consumerInner, producer: () => ({ async connect() {}, async send() {}, async disconnect() {} }) };
+    const consumer = createConsumer({
+      clientId: "t",
+      groupId: "g",
+      consumerId: "c",
+      topics: ["send-mail"],
+      handler: async () => {},
+      kafka: kafka as never,
+      log: () => {},
+    });
+
+    await expect(consumer.start()).rejects.toThrow("does not host this topic-partition");
+    expect(attempts).toBe(6);
+  });
+});

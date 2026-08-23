@@ -197,11 +197,28 @@ export function createConsumer(options: CreateConsumerOptions): ConsumerInstance
       kafka = injectedKafka ?? new Kafka(resolveKafkaConfig(clientId));
       consumer = kafka.consumer({ groupId });
       await consumer.connect();
-      await Promise.all(
-        topics.map((topic) =>
-          consumer!.subscribe({ topic, fromBeginning }),
-        ),
-      );
+      // A topic created moments earlier (e.g. another service's ensureTopic
+      // racing ours on cold start) may not be visible on every broker yet;
+      // subscribe then fails with "server does not host this topic-partition".
+      // Retry with backoff instead of crashing the whole service at startup.
+      const maxAttempts = 6;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await Promise.all(
+            topics.map((topic) =>
+              consumer!.subscribe({ topic, fromBeginning }),
+            ),
+          );
+          break;
+        } catch (err) {
+          if (attempt >= maxAttempts) throw err;
+          const msg = err instanceof Error ? err.message : String(err);
+          log("warn", `Topic subscription failed (attempt ${attempt}/${maxAttempts}), retrying`, {
+            error: msg,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+        }
+      }
       running = true;
       log("info", `Started, listening on ${topics.join(", ")}`);
 
