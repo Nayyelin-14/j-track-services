@@ -10,6 +10,10 @@ import { correlationMiddleware } from "@jtrack/shared/kafka/correlation";
 
 const app = express();
 
+// Single nginx reverse proxy in front of this service — trust exactly one
+// hop so req.ip reflects the real client address (rate limiting keys on it).
+app.set("trust proxy", 1);
+
 app.use(
   cors({
     origin: process.env.FRONTEND_URL || "http://localhost:3000",
