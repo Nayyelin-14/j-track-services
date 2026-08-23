@@ -49,6 +49,7 @@ jobs:
           USER_TAG=0000000000000000000000000000000000000000 \
           JOBSERVICE_TAG=0000000000000000000000000000000000000000 \
           UTILS_TAG=0000000000000000000000000000000000000000 \
+          FRONTEND_TAG=0000000000000000000000000000000000000000 \
           docker compose -f docker-compose.prod.yml config
 
       - name: Create dummy SSL certs for nginx validation
@@ -66,6 +67,7 @@ jobs:
             --add-host user:127.0.0.1 \
             --add-host jobservice:127.0.0.1 \
             --add-host utils:127.0.0.1 \
+            --add-host frontend:127.0.0.1 \
             -v $PWD/nginx/nginx.conf:/etc/nginx/nginx.conf:ro \
             -v $PWD/nginx/prod/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro \
             -v $PWD/nginx/ssl:/etc/nginx/ssl:ro \

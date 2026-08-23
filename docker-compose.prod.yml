@@ -67,6 +67,27 @@ services:
     environment:
       PORT: 6001
 
+  frontend:
+    image: ${GHCR_REPO:?GHCR_REPO required in versions.env}/frontend:${FRONTEND_TAG:?FRONTEND_TAG required}
+    container_name: jtrack-frontend
+    restart: unless-stopped
+    depends_on:
+      - auth
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_USE_MOCK: "false"
+      # proxy.ts (server-side role guards) calls the auth service directly —
+      # internal docker DNS, never exposed to the host.
+      AUTH_API_INTERNAL: http://auth:7000/api
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/login"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
   nginx:
     build:
       context: ./nginx
@@ -85,3 +106,4 @@ services:
       - user
       - jobservice
       - utils
+      - frontend
