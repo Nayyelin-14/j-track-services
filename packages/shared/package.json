@@ -8,7 +8,8 @@
     "build": "prisma generate && tsc",
     "dev": "tsc --watch",
     "db:migrate": "prisma migrate deploy",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "test": "vitest run"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"
@@ -29,6 +30,15 @@
     "./kafka/events": "./dist/kafka/events.js",
     "./kafka/config": "./dist/kafka/config.js",
     "./kafka/consumer": "./dist/kafka/consumer.js",
+    "./kafka/consumer-factory": "./dist/kafka/consumer-factory.js",
+    "./kafka/outbox": "./dist/kafka/outbox.js",
+    "./kafka/envelope": "./dist/kafka/envelope.js",
+    "./kafka/idempotency": "./dist/kafka/idempotency.js",
+    "./kafka/metrics": "./dist/kafka/metrics.js",
+    "./kafka/dlq": "./dist/kafka/dlq.js",
+    "./kafka/correlation": "./dist/kafka/correlation.js",
+    "./kafka/replay": "./dist/kafka/replay.js",
+    "./kafka/partitioning": "./dist/kafka/partitioning.js",
     "./redis/helpers": "./dist/redis/helpers.js",
     "./migrate": "./dist/migrate.js",
     "./logger": "./dist/logger.js"
@@ -39,7 +49,8 @@
     "@types/morgan": "^1.9.10",
     "@types/multer": "^2.1.0",
     "@types/node": "^25.6.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

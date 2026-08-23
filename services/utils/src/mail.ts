@@ -1,6 +1,11 @@
 import nodemailer from "nodemailer";
-import { Kafka } from "kafkajs";
-import { sleep, resolveKafkaConfig } from "@jtrack/shared/kafka/config";
+import { sleep } from "@jtrack/shared/kafka/config";
+
+export function mailDeliveryEnabled(): boolean {
+  if (process.env["MAIL_SEND_ENABLED"] === "true") return true;
+  if (process.env["MAIL_PREVIEW"] === "true") return false;
+  return process.env["NODE_ENV"] === "production";
+}
 
 export function createTransporter() {
   return nodemailer.createTransport({
@@ -20,6 +25,13 @@ export async function sendWithRetry(
   label: string,
   retries = 3,
 ): Promise<void> {
+  if (!mailDeliveryEnabled()) {
+    console.log(
+      `[${label}] Mail delivery disabled — preview only. to=${mailOptions.to} subject=${mailOptions.subject}`,
+    );
+    return;
+  }
+
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       await transporter.sendMail(mailOptions);
@@ -29,22 +41,5 @@ export async function sendWithRetry(
       if (attempt === retries) throw error;
       await sleep(1000 * attempt);
     }
-  }
-}
-
-export async function publishToDLQ(kafka: Kafka, topic: string, message: string, reason: string) {
-  const dlqProducer = kafka.producer();
-  try {
-    await dlqProducer.connect();
-    await dlqProducer.send({
-      topic,
-      messages: [{
-        value: JSON.stringify({ originalMessage: message, failureReason: reason, timestamp: new Date().toISOString() }),
-      }],
-    });
-  } catch (err) {
-    console.error(`[DLQ] Failed to publish to ${topic}:`, err);
-  } finally {
-    await dlqProducer.disconnect();
   }
 }

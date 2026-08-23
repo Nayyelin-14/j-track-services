@@ -79,6 +79,7 @@ vi.mock("../../redis", () => ({
 vi.mock("../../kafka", () => ({ kafka: { publish: mockKafkaPublish } }));
 vi.mock("../../template", () => ({
   resetPasswordEmailTemplate: vi.fn(() => "<html>"),
+  verifyEmailTemplate: vi.fn(() => "<html>"),
 }));
 
 const MODULES = await import("../auth");
@@ -136,7 +137,13 @@ describe("register", () => {
     const res = mockRes();
     await MODULES.register(mockReq({ body: { name: "A", email: "a@b.com", password: "123456", phone_number: "123", role: "recruiter" } }), res);
     expect(res.status).toHaveBeenCalledWith(201);
-    expect(res.json).toHaveBeenCalledWith({ message: "User registered successfully. Please login." });
+    expect(res.json).toHaveBeenCalledWith({ message: "User registered successfully. Please verify your email to log in." });
+    expect(mockSet).toHaveBeenCalled();
+    expect(mockKafkaPublish).toHaveBeenCalledWith(
+      "send-mail",
+      expect.objectContaining({ type: "VERIFY_EMAIL", to: "a@b.com" }),
+      expect.objectContaining({ correlationId: expect.any(String) }),
+    );
   });
 });
 
@@ -164,14 +171,112 @@ describe("login", () => {
     expect(res.status).toHaveBeenCalledWith(401);
   });
 
+  it("returns 403 when email is not verified", async () => {
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, name: "A", email: "a@b.com", password: "hashed", role: "recruiter", is_verified: false });
+    mockBcryptCompare.mockResolvedValueOnce(true);
+    const res = mockRes();
+    await MODULES.login(mockReq({ body: { email: "a@b.com", password: "correct" } }), res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.cookie).not.toHaveBeenCalled();
+  });
+
   it("logs in successfully", async () => {
-    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, name: "A", email: "a@b.com", password: "hashed", role: "recruiter" });
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, name: "A", email: "a@b.com", password: "hashed", role: "recruiter", is_verified: true });
     mockBcryptCompare.mockResolvedValueOnce(true);
     mockUserUpdate.mockResolvedValueOnce({});
     const res = mockRes();
     await MODULES.login(mockReq({ body: { email: "a@b.com", password: "correct" } }), res);
     expect(res.cookie).toHaveBeenCalledTimes(2);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: "Login success" }));
+  });
+});
+
+describe("verifyEmail", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it("throws 400 without token", async () => {
+    const res = mockRes();
+    await MODULES.verifyEmail(mockReq({ body: {} }), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it("throws 400 for an invalid or expired token", async () => {
+    vi.spyOn(jwt, "verify").mockImplementationOnce(() => {
+      throw new Error("jwt expired");
+    });
+    const res = mockRes();
+    await MODULES.verifyEmail(mockReq({ body: { token: "bad-token" } }), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it("throws 400 when token does not match stored token", async () => {
+    vi.spyOn(jwt, "verify").mockReturnValueOnce({ user_id: 1, email: "a@b.com", type: "verify-email" } as any);
+    mockGet.mockResolvedValueOnce("different-token");
+    const res = mockRes();
+    await MODULES.verifyEmail(mockReq({ body: { token: "reset-token" } }), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it("verifies the email", async () => {
+    vi.spyOn(jwt, "verify").mockReturnValueOnce({ user_id: 1, email: "a@b.com", type: "verify-email" } as any);
+    mockGet.mockResolvedValueOnce("reset-token");
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, is_verified: false });
+    mockUserUpdate.mockResolvedValueOnce({});
+    const res = mockRes();
+    await MODULES.verifyEmail(mockReq({ body: { token: "reset-token" } }), res);
+    expect(mockUserUpdate).toHaveBeenCalledWith({
+      where: { user_id: 1 },
+      data: { is_verified: true },
+    });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  it("returns success when already verified", async () => {
+    vi.spyOn(jwt, "verify").mockReturnValueOnce({ user_id: 1, email: "a@b.com", type: "verify-email" } as any);
+    mockGet.mockResolvedValueOnce("reset-token");
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, is_verified: true });
+    const res = mockRes();
+    await MODULES.verifyEmail(mockReq({ body: { token: "reset-token" } }), res);
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("already verified") }));
+  });
+});
+
+describe("resendVerification", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it("throws 400 without email", async () => {
+    const res = mockRes();
+    await MODULES.resendVerification(mockReq({ body: {} }), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it("returns generic message even if email not found", async () => {
+    mockUserFindFirst.mockResolvedValueOnce(null);
+    const res = mockRes();
+    await MODULES.resendVerification(mockReq({ body: { email: "nobody@b.com" } }), res);
+    expect(res.json).toHaveBeenCalledWith({ success: true, message: expect.stringContaining("verification link") });
+  });
+
+  it("returns already verified message for verified users", async () => {
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, email: "a@b.com", name: "A", is_verified: true });
+    const res = mockRes();
+    await MODULES.resendVerification(mockReq({ body: { email: "a@b.com" } }), res);
+    expect(mockKafkaPublish).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("already verified") }));
+  });
+
+  it("resends verification email for unverified users", async () => {
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, email: "a@b.com", name: "A", is_verified: false });
+    process.env.FRONTEND_URL = "http://localhost:3000";
+    const res = mockRes();
+    await MODULES.resendVerification(mockReq({ body: { email: "a@b.com" } }), res);
+    expect(mockKafkaPublish).toHaveBeenCalledWith(
+      "send-mail",
+      expect.objectContaining({ type: "VERIFY_EMAIL", to: "a@b.com" }),
+      expect.objectContaining({ correlationId: expect.any(String) }),
+    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 });
 
@@ -189,6 +294,23 @@ describe("logout", () => {
     mockUserUpdate.mockResolvedValueOnce({});
     const res = mockRes();
     await MODULES.logout(mockReq({ user: { user_id: 1 }, cookies: { refreshToken: "rt" } }), res);
+    expect(res.clearCookie).toHaveBeenCalledTimes(2);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  it("still logs out when refresh token belongs to a newer session", async () => {
+    mockUserFindFirst.mockResolvedValueOnce({ user_id: 1, refresh_token: "newer-rt" });
+    const res = mockRes();
+    await MODULES.logout(mockReq({ user: { user_id: 1 }, cookies: { refreshToken: "stale-rt" } }), res);
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(res.clearCookie).toHaveBeenCalledTimes(2);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  it("logs out and clears cookies even without a refresh token", async () => {
+    const res = mockRes();
+    await MODULES.logout(mockReq({ user: { user_id: 1 }, cookies: {} }), res);
+    expect(mockUserFindFirst).not.toHaveBeenCalled();
     expect(res.clearCookie).toHaveBeenCalledTimes(2);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });

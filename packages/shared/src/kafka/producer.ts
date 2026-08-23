@@ -1,11 +1,19 @@
 import { Kafka, Producer } from "kafkajs";
-import { ProducerInstance, KafkaHealth } from "./types";
+import { ProducerInstance, KafkaHealth, PublishOptions } from "./types";
 import { sleep, resolveKafkaConfig } from "./config";
+import { wrapInEnvelope, isEnvelope } from "./envelope";
+import { isRetryablePublishError } from "./outbox";
 
-const REGISTRY = new Map<string, { kafka: Kafka; producer: Producer; connected: boolean }>();
+const REGISTRY = new Map<
+  string,
+  { kafka: Kafka; producer: Producer; connected: boolean }
+>();
 const PENDING_CONNECTIONS = new Map<string, Promise<void>>();
 
-async function connectWithBackoff(producer: Producer, maxRetries = 5): Promise<void> {
+async function connectWithBackoff(
+  producer: Producer,
+  maxRetries = 5,
+): Promise<void> {
   let lastError: Error | undefined;
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -22,21 +30,58 @@ async function connectWithBackoff(producer: Producer, maxRetries = 5): Promise<v
   throw lastError || new Error("Failed to connect to Kafka");
 }
 
-export function getKafkaProducer(clientId: string): ProducerInstance {
+export interface KafkaProducerDeps {
+  /**
+   * Injectable { kafka, producer } factory. Defaults to a real KafkaJS
+   * client built from env config. Used by tests to avoid a live broker.
+   */
+  build?: () => { kafka: Kafka; producer: Producer };
+}
+
+function createDefaultProducer(clientId: string): {
+  kafka: Kafka;
+  producer: Producer;
+} {
+  const config = resolveKafkaConfig(clientId);
+  const kafka = new Kafka(config);
+  const producer = kafka.producer({
+    idempotent: true,
+    maxInFlightRequests: 5,
+  });
+  return { kafka, producer };
+}
+
+export function getKafkaProducer(
+  clientId: string,
+  deps?: KafkaProducerDeps,
+): ProducerInstance {
   const existing = REGISTRY.get(clientId);
   if (existing) {
     return buildInterface(clientId, existing);
   }
 
-  const config = resolveKafkaConfig(clientId);
-  const kafka = new Kafka(config);
-  const producer = kafka.producer();
+  const { kafka, producer } = deps?.build?.() ?? createDefaultProducer(clientId);
   const state = { kafka, producer, connected: false };
+
+  // Keep `state.connected` honest. Before this, a broker drop after startup
+  // left the flag `true` forever, so nothing ever re-established the session
+  // and every later publish failed against a dead connection. These events
+  // make connect()/publish() self-healing and prevent duplicate connects.
+  producer.on("producer.connect", () => {
+    state.connected = true;
+  });
+  producer.on("producer.disconnect", () => {
+    state.connected = false;
+  });
+
   REGISTRY.set(clientId, state);
   return buildInterface(clientId, state);
 }
 
-function buildInterface(clientId: string, state: { kafka: Kafka; producer: Producer; connected: boolean }): ProducerInstance {
+function buildInterface(
+  clientId: string,
+  state: { kafka: Kafka; producer: Producer; connected: boolean },
+): ProducerInstance {
   return {
     async connect(): Promise<void> {
       if (state.connected) return;
@@ -58,14 +103,57 @@ function buildInterface(clientId: string, state: { kafka: Kafka; producer: Produ
       }
     },
 
-    async publish<T = Record<string, unknown>>(topic: string, message: T): Promise<void> {
+    async publish<T = Record<string, unknown>>(
+      topic: string,
+      message: T,
+      options?: PublishOptions,
+    ): Promise<void> {
+      // Self-heal: if a disconnect happened since connect() (broker blip,
+      // idle session close), reconnect before sending instead of failing.
       if (!state.connected) {
-        throw new Error("Kafka producer not connected. Call connect() first.");
+        await this.connect();
       }
-      await state.producer.send({
-        topic,
-        messages: [{ value: JSON.stringify(message) }],
-      });
+
+      const alreadyEnveloped = isEnvelope(message);
+      const envelope = alreadyEnveloped
+        ? (message as unknown as { eventType?: string })
+        : wrapInEnvelope({
+            eventId: options?.eventId,
+            eventType:
+              options?.eventType ??
+              (typeof (message as Record<string, unknown>)["type"] === "string"
+                ? ((message as Record<string, unknown>)["type"] as string)
+                : "unknown"),
+            eventVersion: options?.eventVersion ?? 1,
+            occurredAt: options?.occurredAt,
+            source: options?.source ?? clientId,
+            correlationId: options?.correlationId,
+            payload: message as T,
+          });
+
+      try {
+        await state.producer.send({
+          topic,
+          messages: [
+            {
+              key: options?.key ?? null,
+              value: JSON.stringify(envelope),
+              headers: options?.correlationId
+                ? { correlationId: options.correlationId }
+                : undefined,
+            },
+          ],
+        });
+      } catch (err) {
+        // A connectivity error means the session may be poisoned even though
+        // no disconnect event fired (silent broker drop). Invalidate our
+        // belief so the NEXT publish attempts a fresh connect instead of
+        // reusing a dead session forever.
+        if (isRetryablePublishError(err)) {
+          state.connected = false;
+        }
+        throw err;
+      }
     },
 
     async disconnect(): Promise<void> {
@@ -106,3 +194,19 @@ function buildInterface(clientId: string, state: { kafka: Kafka; producer: Produ
     },
   };
 }
+
+// getKafkaProducer("job-service")
+//         ↓
+// Kafka instance + Producer ဖန်တီး
+//         ↓
+// connect()
+//         ↓
+// Kafka broker ဆီ connection ချိတ်
+//         ↓
+// publish(topic, message)
+//         ↓
+// Message ကို EventEnvelope ထဲထည့်
+//         ↓
+// Kafka topic ထဲပို့
+//         ↓
+// healthCheck() / disconnect()

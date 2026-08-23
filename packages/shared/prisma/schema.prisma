@@ -50,6 +50,7 @@ model User {
   resume_public_id      String?           @db.VarChar(255)
   profile_pic           String?           @db.VarChar(255)
   profile_pic_public_id String?           @db.VarChar(255)
+  is_verified           Boolean           @default(false)
   created_at            DateTime          @default(now()) @db.Timestamptz(6)
   subscription          DateTime?         @db.Timestamptz(6)
   subscription_tier     subscription_tier @default(free)
@@ -101,6 +102,8 @@ model Company {
   description     String
   website         String   @db.VarChar(255)
   location        String?  @db.VarChar(255)
+  size            String?  @db.VarChar(64)
+  industry        String?  @db.VarChar(255)
   logo            String?  @db.VarChar(255)
   logo_public_id  String?  @db.VarChar(255)
   recruiter_id    Int
@@ -116,7 +119,9 @@ model Job {
   job_id                 Int            @id @default(autoincrement())
   title                  String         @db.VarChar(255)
   description            String
-  salary                 Decimal?       @db.Decimal(10, 2)
+  // Stored as text so salary ranges like "1000-2000" round-trip exactly.
+  // Plain numbers are normalized to their string form by the API layer.
+  salary                 String?        @db.VarChar(64)
   location               String?        @db.VarChar(255)
   job_type               job_type
   openings               Decimal        @db.Decimal(3, 1)
@@ -146,6 +151,7 @@ model Application {
   job             Job                @relation(fields: [job_id], references: [job_id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([job_id, applicant_id])
+  @@index([applicant_id])
   @@map("applications")
 }
 
@@ -159,4 +165,50 @@ model JobAnalytics {
 
   @@id([job_id, date])
   @@map("job_analytics")
+}
+
+enum outbox_status {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+}
+
+model OutboxEvent {
+  id            BigInt        @id @default(autoincrement())
+  eventId       String        @unique
+  eventType     String        @db.VarChar(100)
+  eventVersion  Int           @default(1)
+  topic         String        @db.VarChar(255)
+  partitionKey  String?       @db.VarChar(255)
+  source        String        @db.VarChar(100)
+  correlationId String?       @db.VarChar(255)
+  payload       Json
+  status        outbox_status @default(PENDING)
+  attempts      Int           @default(0)
+  availableAt   DateTime      @default(now())
+  createdAt     DateTime      @default(now()) @db.Timestamptz(6)
+  claimedAt     DateTime?
+  claimedBy     String?       @db.VarChar(100)
+  processedAt   DateTime?
+  lastError     String?
+
+  @@index([status, availableAt])
+  @@index([eventType])
+  @@map("outbox_events")
+}
+
+model ConsumerDedup {
+  id           BigInt   @id @default(autoincrement())
+  consumerId   String   @db.VarChar(100)
+  eventId      String   @db.VarChar(255)
+  eventType    String   @db.VarChar(100)
+  partition    Int
+  offset       BigInt
+  processedAt  DateTime @default(now()) @db.Timestamptz(6)
+  occurredAt   DateTime? @db.Timestamptz(6)
+
+  @@unique([consumerId, eventId])
+  @@index([processedAt])
+  @@map("consumer_dedup")
 }

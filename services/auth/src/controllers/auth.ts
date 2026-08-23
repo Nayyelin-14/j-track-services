@@ -14,9 +14,10 @@ import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import { getBuffer } from "@jtrack/shared/buffer";
 import type { AuthRequest } from "@jtrack/shared/types";
 import { kafka } from "../kafka.js";
+import { getCorrelationId } from "@jtrack/shared/kafka/correlation";
 import { createRedisHelpers } from "@jtrack/shared/redis/helpers";
 import { redisClient } from "../redis.js";
-import { resetPasswordEmailTemplate } from "../template.js";
+import { resetPasswordEmailTemplate, verifyEmailTemplate } from "../template.js";
 
 const {
   checkForgotPasswordRate,
@@ -29,6 +30,43 @@ const {
 } = createRedisHelpers(redisClient);
 
 const UTIL_SERVICE = process.env.UTILS_SERVICE_URL || "http://localhost:6001/api/utils";
+
+const VERIFY_TOKEN_PREFIX = "verify:";
+const VERIFY_TOKEN_TTL = 900;
+
+async function sendVerificationEmail(user: {
+  user_id: number;
+  email: string;
+  name: string;
+}) {
+  const token = signResetToken({
+    user_id: user.user_id,
+    email: user.email,
+    type: "verify-email",
+  });
+
+  await setRedisValue(
+    `${VERIFY_TOKEN_PREFIX}${user.user_id}${user.email}`,
+    token,
+    VERIFY_TOKEN_TTL,
+  );
+
+  const verifyLink = `${process.env.FRONTEND_URL}/verify-email?token=${token}`;
+
+  await kafka.publish("send-mail", {
+    type: "VERIFY_EMAIL",
+    to: user.email,
+    subject: "Verify Your Email",
+    html: verifyEmailTemplate({
+      name: user.name,
+      verifyLink,
+      expiresInMinutes: 15,
+    }),
+  }, {
+    correlationId: getCorrelationId(),
+    eventType: "VERIFY_EMAIL",
+  });
+}
 
 export const register = TryCatch(async (req: Request, res: Response) => {
   const { name, email, password, phone_number, role, bio } = req.body;
@@ -51,8 +89,12 @@ export const register = TryCatch(async (req: Request, res: Response) => {
 
   const hashedPassword = await bcrypt.hash(password, 12);
 
+  let created:
+    | { user_id: number; name: string; email: string }
+    | undefined;
+
   if (role === "recruiter") {
-    await prisma.user.create({
+    created = await prisma.user.create({
       data: {
         name,
         email,
@@ -60,6 +102,7 @@ export const register = TryCatch(async (req: Request, res: Response) => {
         phone_number,
         role: "recruiter",
       },
+      select: { user_id: true, name: true, email: true },
     });
   } else if (role === "jobseeker") {
     const file = req?.file;
@@ -80,7 +123,7 @@ export const register = TryCatch(async (req: Request, res: Response) => {
       }
     }
 
-    await prisma.user.create({
+    created = await prisma.user.create({
       data: {
         name,
         email,
@@ -91,11 +134,129 @@ export const register = TryCatch(async (req: Request, res: Response) => {
         resume: url,
         resume_public_id: public_id,
       },
+      select: { user_id: true, name: true, email: true },
     });
   }
 
+  if (created) {
+    try {
+      await sendVerificationEmail(created);
+    } catch (error) {
+      await deleteRedisValue(
+        `${VERIFY_TOKEN_PREFIX}${created.user_id}${created.email}`,
+      );
+      console.error(
+        "[Auth] Failed to send verification email (user still registered):",
+        error,
+      );
+    }
+  }
+
   return res.status(201).json({
-    message: "User registered successfully. Please login.",
+    message: "User registered successfully. Please verify your email to log in.",
+  });
+});
+
+export const verifyEmail = TryCatch(async (req: Request, res: Response) => {
+  const { token } = req.body;
+
+  if (!token) {
+    throw new ErrorHandler(400, "Verification token is required");
+  }
+
+  let payload: { user_id: number; email: string; type: string };
+  try {
+    payload = jwt.verify(token, process.env.JWT_RESET_SECRET!) as any;
+  } catch {
+    throw new ErrorHandler(400, "Invalid or expired verification link");
+  }
+
+  if (payload.type !== "verify-email") {
+    throw new ErrorHandler(400, "Invalid token type");
+  }
+
+  const storedToken = await getRedisValue(
+    `${VERIFY_TOKEN_PREFIX}${payload.user_id}${payload.email}`,
+  );
+  if (!storedToken || storedToken !== token) {
+    throw new ErrorHandler(
+      400,
+      "Verification link has already been used or expired",
+    );
+  }
+
+  const user = await prisma.user.findFirst({
+    where: { user_id: payload.user_id, email: payload.email },
+    select: { user_id: true, is_verified: true },
+  });
+
+  if (!user) {
+    throw new ErrorHandler(404, "User no longer exists");
+  }
+
+  if (user.is_verified) {
+    await deleteRedisValue(
+      `${VERIFY_TOKEN_PREFIX}${payload.user_id}${payload.email}`,
+    );
+    return res.json({ success: true, message: "Email is already verified." });
+  }
+
+  await prisma.user.update({
+    where: { user_id: payload.user_id },
+    data: { is_verified: true },
+  });
+
+  await deleteRedisValue(
+    `${VERIFY_TOKEN_PREFIX}${payload.user_id}${payload.email}`,
+  );
+  await invalidateUserAuthCache(payload.user_id);
+
+  return res.json({
+    success: true,
+    message: "Email verified successfully. You can now log in.",
+  });
+});
+
+export const resendVerification = TryCatch(async (req: Request, res: Response) => {
+  const { email } = req.body;
+
+  if (!email) {
+    throw new ErrorHandler(400, "Email is required");
+  }
+
+  await checkForgotPasswordRate(email);
+
+  const user = await prisma.user.findFirst({
+    where: { email },
+    select: { user_id: true, email: true, name: true, is_verified: true },
+  });
+
+  if (!user) {
+    return res.status(200).json({
+      success: true,
+      message: "If that email exists, a verification link has been sent",
+    });
+  }
+
+  if (user.is_verified) {
+    return res.json({ success: true, message: "Email is already verified." });
+  }
+
+  try {
+    await sendVerificationEmail(user);
+  } catch (error) {
+    await deleteRedisValue(
+      `${VERIFY_TOKEN_PREFIX}${user.user_id}${user.email}`,
+    );
+    throw new ErrorHandler(
+      500,
+      "Failed to send verification email. Please try again.",
+    );
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: "Verification link sent. Please check your inbox.",
   });
 });
 
@@ -108,7 +269,14 @@ export const login = TryCatch(async (req: Request, res: Response) => {
 
   const user = await prisma.user.findFirst({
     where: { email },
-    select: { user_id: true, name: true, email: true, password: true, role: true },
+    select: {
+      user_id: true,
+      name: true,
+      email: true,
+      password: true,
+      role: true,
+      is_verified: true,
+    },
   });
 
   if (!user) {
@@ -118,6 +286,13 @@ export const login = TryCatch(async (req: Request, res: Response) => {
   const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) {
     throw new ErrorHandler(401, "Invalid credentials");
+  }
+
+  if (!user.is_verified) {
+    throw new ErrorHandler(
+      403,
+      "Email not verified. Please check your inbox to verify your account.",
+    );
   }
 
   const payload = { user_id: user.user_id, role: user.role };
@@ -153,23 +328,23 @@ export const logout = TryCatch(async (req: AuthRequest, res: Response) => {
     throw new ErrorHandler(401, "Unauthorized");
   }
 
-  const user = await prisma.user.findFirst({
-    where: { user_id: userData.user_id },
-    select: { user_id: true, refresh_token: true },
-  });
+  if (refreshToken) {
+    const user = await prisma.user.findFirst({
+      where: { user_id: userData.user_id },
+      select: { user_id: true, refresh_token: true },
+    });
 
-  if (!user) {
-    throw new ErrorHandler(404, "User not found");
+    // The refresh_token column only holds the most recent login, so a
+    // session from an older device/tab may not match. Logout is idempotent:
+    // always clear THIS client's cookies; only revoke server-side when the
+    // token actually belongs to this session.
+    if (user && user.refresh_token === refreshToken) {
+      await prisma.user.update({
+        where: { user_id: user.user_id },
+        data: { refresh_token: null },
+      });
+    }
   }
-
-  if (refreshToken && user.refresh_token !== refreshToken) {
-    throw new ErrorHandler(401, "Invalid session");
-  }
-
-  await prisma.user.update({
-    where: { user_id: user.user_id },
-    data: { refresh_token: null },
-  });
 
   res.clearCookie("accessToken");
   res.clearCookie("refreshToken");
@@ -281,6 +456,9 @@ export const forgotPassword = TryCatch(async (req: Request, res: Response) => {
         resetLink,
         expiresInMinutes: 15,
       }),
+    }, {
+      correlationId: getCorrelationId(),
+      eventType: "RESET_PASSWORD",
     });
   } catch (error) {
     await deleteRedisValue(`${RESET_TOKEN_PREFIX}${user.user_id}${user.email}`);

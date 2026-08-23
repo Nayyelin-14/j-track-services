@@ -1,6 +1,5 @@
 import { Response } from "express";
 import { prisma } from "@jtrack/shared/db";
-import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
 
@@ -9,7 +8,8 @@ const UTILS_SERVICE_URL = process.env.UTILS_SERVICE_URL;
 function buildJobPayload(job: {
   title: string;
   description: string;
-  salary: number | null;
+  // Salary is stored as text and may be a single amount or a "min-max" range
+  salary: string | null;
   location: string | null;
   job_type: string | null;
   work_location: string | null;
@@ -22,7 +22,7 @@ function buildJobPayload(job: {
     title: job.title,
     description: job.description,
   };
-  if (job.salary != null) payload.salary = Number(job.salary);
+  if (job.salary != null) payload.salary = job.salary;
   if (job.location) payload.location = job.location;
   if (job.job_type) payload.job_type = job.job_type;
   if (job.work_location) payload.work_location = job.work_location;
@@ -40,7 +40,7 @@ const setSSEHeaders = (res: Response): void => {
   res.flushHeaders();
 };
 
-export const analyzeJobMatch = TryCatch(async (req: AuthRequest, res: Response) => {
+export const analyzeJobMatch = async (req: AuthRequest, res: Response) => {
   const user = req.user;
   if (!user) {
     throw new ErrorHandler(401, "Authentication required");
@@ -101,11 +101,19 @@ export const analyzeJobMatch = TryCatch(async (req: AuthRequest, res: Response) 
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const requestedModel =
+      typeof req.body?.model === "string" &&
+      req.body.model.length > 0 &&
+      req.body.model.length <= 200
+        ? req.body.model
+        : undefined;
+
     const response = await fetch(`${UTILS_SERVICE_URL}/ai/analyze-match`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         resumeUrl: userRow.resume,
+        ...(requestedModel ? { model: requestedModel } : {}),
         job: buildJobPayload(job as Parameters<typeof buildJobPayload>[0]),
       }),
       signal: controller.signal,
@@ -125,14 +133,30 @@ export const analyzeJobMatch = TryCatch(async (req: AuthRequest, res: Response) 
 
     const reader = response.body?.getReader();
     if (!reader) {
-      throw new ErrorHandler(500, "No response stream from analysis service");
+      if (!res.writableEnded) {
+        res.write(
+          `data: ${JSON.stringify({ status: "error", message: "No response stream from analysis service" })}\n\n`,
+        );
+        res.end();
+      }
+      return;
     }
 
     const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      res.write(decoder.decode(value, { stream: true }));
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(decoder.decode(value, { stream: true }));
+      }
+    } catch (streamError) {
+      if (!res.writableEnded) {
+        const message = streamError instanceof Error ? streamError.message : "Stream error";
+        res.write(
+          `data: ${JSON.stringify({ status: "error", message })}\n\n`,
+        );
+        res.end();
+      }
     }
   } catch (error) {
     clearTimeout(timeoutId);
@@ -145,10 +169,22 @@ export const analyzeJobMatch = TryCatch(async (req: AuthRequest, res: Response) 
       return;
     }
 
-    throw error;
+    if (!res.writableEnded) {
+      if (error instanceof ErrorHandler) {
+        res.write(
+          `data: ${JSON.stringify({ status: "error", message: error.message })}\n\n`,
+        );
+      } else {
+        const message = error instanceof Error ? error.message : "Analysis failed";
+        res.write(
+          `data: ${JSON.stringify({ status: "error", message })}\n\n`,
+        );
+      }
+      res.end();
+    }
   } finally {
     if (!res.writableEnded) {
       res.end();
     }
   }
-});
+};

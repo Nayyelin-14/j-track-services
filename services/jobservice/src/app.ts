@@ -7,6 +7,7 @@ import rateLimit from "express-rate-limit";
 import jobRoutes from "./routes/job.route.js";
 import { errorMiddleware } from "@jtrack/shared/errorHandler";
 import { requestLogger } from "@jtrack/shared/logger";
+import { correlationMiddleware } from "@jtrack/shared/kafka/correlation";
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.use(globalLimiter);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
+app.use(correlationMiddleware());
 app.use(requestLogger);
 
 app.use("/api/jobs", jobRoutes);

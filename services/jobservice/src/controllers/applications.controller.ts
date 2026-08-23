@@ -4,16 +4,28 @@ import { TryCatch } from "@jtrack/shared/tryCatch";
 import { ErrorHandler } from "@jtrack/shared/errorHandler";
 import type { AuthRequest } from "@jtrack/shared/types";
 import { withCache } from "@jtrack/shared/redis/helpers";
-import { kafka } from "../kafka.js";
+import { enqueueOutboxEvent, newEventId } from "@jtrack/shared/kafka/outbox";
+import { getCorrelationId } from "@jtrack/shared/kafka/correlation";
+import { jobPartitionKey, applicantPartitionKey } from "@jtrack/shared/kafka/partitioning";
 import { redisClient } from "../redis.js";
 import { applicationStatusTemplate } from "../utils/template.js";
 import {
   CACHE_KEYS,
   sanitizePositiveInt,
+  invalidateByPattern,
 } from "./utils.js";
 
-const APPLICATION_STATUSES = ["Submitted", "Rejected", "Hired"] as const;
+const APPLICATION_STATUSES = ["Submitted", "Rejected", "Hired", "Applied"] as const;
 type ApplicationStatus = (typeof APPLICATION_STATUSES)[number];
+
+const parseFilter = (value: string | string[] | undefined): string[] => {
+  if (value === undefined) return [];
+  const parts = Array.isArray(value) ? value : [value];
+  return parts
+    .flatMap((v) => v.split(","))
+    .map((v) => v.trim())
+    .filter(Boolean);
+};
 
 export const applyJob = TryCatch(
   async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -26,7 +38,6 @@ export const applyJob = TryCatch(
     }
 
     const applicant_id = user.user_id;
-    const resume = user?.resume;
 
     const jobId = Number(req.body.jobId);
     if (!jobId || isNaN(jobId)) {
@@ -35,10 +46,16 @@ export const applyJob = TryCatch(
 
     const applicant = await prisma.user.findFirst({
       where: { user_id: applicant_id },
-      select: { email: true },
+      select: { email: true, resume: true },
     });
     if (!applicant) {
       return next(new ErrorHandler(404, "Applicant not found"));
+    }
+    const resume = applicant.resume ?? null;
+    if (!resume) {
+      return next(
+        new ErrorHandler(400, "Please upload a resume before applying"),
+      );
     }
     const applicant_email = applicant.email;
 
@@ -59,14 +76,34 @@ export const applyJob = TryCatch(
 
     let newApplication;
     try {
-      newApplication = await prisma.application.create({
-        data: {
-          job_id: jobId,
-          applicant_id,
-          applicant_email,
-          subscribed: isSubscribed,
-          ...(resume && { resume }),
-        } as any,
+      newApplication = await prisma.$transaction(async (tx) => {
+        const application = await tx.application.create({
+          data: {
+            job_id: jobId,
+            applicant_id,
+            applicant_email,
+            subscribed: isSubscribed,
+            ...(resume && { resume }),
+          } as any,
+        });
+
+        await enqueueOutboxEvent(tx, {
+          eventId: newEventId(),
+          eventType: "job.applied",
+          eventVersion: 1,
+          topic: "job-events",
+          partitionKey: jobPartitionKey(jobId),
+          source: "job-service",
+          correlationId: getCorrelationId(),
+          payload: {
+            type: "job.applied",
+            job_id: application.job_id,
+            applicant_id,
+            applied_at: new Date().toISOString(),
+          },
+        });
+
+        return application;
       });
     } catch (error: any) {
       if (error.code === "P2002") {
@@ -76,19 +113,10 @@ export const applyJob = TryCatch(
     }
 
     try {
-      await redisClient.del(CACHE_KEYS.applications(applicant_id));
+      await invalidateByPattern(`${CACHE_KEYS.applications(applicant_id)}*`);
     } catch (err) {
       console.error("[Redis] Cache invalidation error (non-fatal):", err);
     }
-
-    kafka.publish("job-events", {
-      type: "job.applied",
-      job_id: newApplication.job_id,
-      applicant_id,
-      applied_at: new Date().toISOString(),
-    }).catch((err: unknown) =>
-      console.error("[Kafka] Failed to publish job.applied event:", err),
-    );
 
     return res.status(200).json({
       success: true,
@@ -112,13 +140,26 @@ export const getApplications = TryCatch(
 
     const applicant_id = req.user.user_id;
 
+    const rawStatuses = parseFilter((req.query as { status?: string | string[] }).status);
+    const invalidStatus = rawStatuses.find(
+      (v) => !APPLICATION_STATUSES.includes(v as ApplicationStatus),
+    );
+    if (invalidStatus) {
+      throw new ErrorHandler(400, `Invalid status filter: ${invalidStatus}`);
+    }
+
+    const statusFilter =
+      rawStatuses.length > 0 ? { status: { in: rawStatuses } as any } : {};
+
+    const cacheKey = `${CACHE_KEYS.applications(applicant_id)};status=${rawStatuses.join(",")}`;
+
     const { data: applications, fromCache } = await withCache(
       redisClient,
-      CACHE_KEYS.applications(applicant_id),
+      cacheKey,
       300,
       async () => {
         const applications = await prisma.application.findMany({
-          where: { applicant_id },
+          where: { applicant_id, ...statusFilter },
           select: {
             application_id: true,
             status: true,
@@ -145,10 +186,6 @@ export const getApplications = TryCatch(
           },
           orderBy: { applied_at: "desc" },
         });
-
-        if (applications.length === 0) {
-          throw new ErrorHandler(404, "No applications found");
-        }
 
         return applications.map((a: { application_id: number; status: string; applied_at: Date; subscribed: boolean | null; job: { job_id: number; title: string; salary: unknown; location: string | null; job_type: unknown; work_location: unknown; is_active: boolean | null; company: { company_id: number; name: string; logo: string | null } } }) => ({
           application_id: a.application_id,
@@ -193,81 +230,119 @@ export const getApplicationsByRecruiterJob = TryCatch(
     const job_id = sanitizePositiveInt(req.params.job_id, "Job ID");
     const recruiter_id = req.user.user_id;
 
-    const { data: applications, fromCache } = await withCache(
-      redisClient,
-      CACHE_KEYS.applicationsByJob(job_id),
-      300,
-      async () => {
-        const applications = await prisma.application.findMany({
-          where: {
-            job_id,
-            job: { posted_by_recruiter_id: recruiter_id },
-          },
-          select: {
-            application_id: true,
-            status: true,
-            applied_at: true,
-            subscribed: true,
-            resume: true,
-            applicant_id: true,
-            job: {
-              select: {
-                job_id: true,
-                title: true,
-              },
-            },
-          },
-          orderBy: [
-            { subscribed: "desc" },
-            { applied_at: "asc" },
-          ],
-        });
+    const job = await prisma.job.findFirst({
+      where: { job_id, posted_by_recruiter_id: recruiter_id },
+      select: { job_id: true },
+    });
+    if (!job) {
+      return next(new ErrorHandler(404, "Job not found or access denied"));
+    }
 
-        if (applications.length === 0) {
-          throw new ErrorHandler(404, "Job not found or access denied");
-        }
-
-        const userIds = applications.map((a: { applicant_id: number }) => a.applicant_id);
-        const users = await prisma.user.findMany({
-          where: { user_id: { in: userIds } },
-          select: {
-            user_id: true,
-            name: true,
-            email: true,
-            phone_number: true,
-            bio: true,
-            profile_pic: true,
-          },
-        });
-        const usersTyped = users as Array<{ user_id: number; name: string | null; email: string | null; phone_number: string | null; bio: string | null; profile_pic: string | null }>;
-        const userMap = new Map(usersTyped.map((u: { user_id: number; name: string | null; email: string | null; phone_number: string | null; bio: string | null; profile_pic: string | null }) => [u.user_id, u]));
-
-        return applications.map((a: { application_id: number; status: string; applied_at: Date; subscribed: boolean | null; resume: string | null; applicant_id: number; job: { job_id: number; title: string } }) => {
-          const u = userMap.get(a.applicant_id);
-          return {
-            application_id: a.application_id,
-            status: a.status,
-            applied_at: a.applied_at,
-            subscribed: a.subscribed,
-            resume: a.resume,
-            user_id: u?.user_id,
-            name: u?.name,
-            email: u?.email,
-            phone_number: u?.phone_number,
-            bio: u?.bio,
-            profile_pic: u?.profile_pic,
-            job_id: a.job.job_id,
-            title: a.job.title,
-          };
-        });
-      },
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const sort = typeof req.query.sort === "string" ? req.query.sort.trim() : "subscribed";
+    const rawStatuses = parseFilter((req.query as { status?: string | string[] }).status);
+    const invalidStatus = rawStatuses.find(
+      (v) => !APPLICATION_STATUSES.includes(v as ApplicationStatus),
     );
+    if (invalidStatus) {
+      throw new ErrorHandler(400, `Invalid status filter: ${invalidStatus}`);
+    }
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+    const offset = (page - 1) * limit;
+
+    const dbWhere: any = { job_id };
+    if (rawStatuses.length > 0) {
+      dbWhere.status = { in: rawStatuses };
+    }
+
+    const applications = await prisma.application.findMany({
+      where: dbWhere,
+      select: {
+        application_id: true,
+        status: true,
+        applied_at: true,
+        subscribed: true,
+        resume: true,
+        applicant_id: true,
+        job: {
+          select: {
+            job_id: true,
+            title: true,
+          },
+        },
+      },
+      orderBy: [{ subscribed: "desc" }, { applied_at: "asc" }],
+    });
+
+    const userIds = applications.map((a: { applicant_id: number }) => a.applicant_id);
+    const users = await prisma.user.findMany({
+      where: { user_id: { in: userIds } },
+      select: {
+        user_id: true,
+        name: true,
+        email: true,
+        phone_number: true,
+        bio: true,
+        profile_pic: true,
+      },
+    });
+    const usersTyped = users as Array<{ user_id: number; name: string | null; email: string | null; phone_number: string | null; bio: string | null; profile_pic: string | null }>;
+    const userMap = new Map(usersTyped.map((u: { user_id: number; name: string | null; email: string | null; phone_number: string | null; bio: string | null; profile_pic: string | null }) => [u.user_id, u]));
+
+    let mapped = applications.map((a: { application_id: number; status: string; applied_at: Date; subscribed: boolean | null; resume: string | null; applicant_id: number; job: { job_id: number; title: string } }) => {
+      const u = userMap.get(a.applicant_id);
+      return {
+        application_id: a.application_id,
+        status: a.status,
+        applied_at: a.applied_at,
+        subscribed: a.subscribed,
+        resume: a.resume,
+        user_id: u?.user_id,
+        name: u?.name,
+        email: u?.email,
+        phone_number: u?.phone_number,
+        bio: u?.bio,
+        profile_pic: u?.profile_pic,
+        job_id: a.job.job_id,
+        title: a.job.title,
+      };
+    });
+
+    if (search) {
+      const q = search.toLowerCase();
+      mapped = mapped.filter(
+        (a) =>
+          (a.name ?? "").toLowerCase().includes(q) ||
+          (a.email ?? "").toLowerCase().includes(q) ||
+          (a.bio ?? "").toLowerCase().includes(q),
+      );
+    }
+
+    if (sort === "date") {
+      mapped.sort(
+        (a, b) => new Date(b.applied_at).getTime() - new Date(a.applied_at).getTime(),
+      );
+    } else if (sort === "name") {
+      mapped.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+    } else {
+      mapped.sort((a, b) => {
+        if (a.subscribed && !b.subscribed) return -1;
+        if (!a.subscribed && b.subscribed) return 1;
+        return new Date(a.applied_at).getTime() - new Date(b.applied_at).getTime();
+      });
+    }
+
+    const total = mapped.length;
+    const paged = mapped.slice(offset, offset + limit);
 
     return res.status(200).json({
       success: true,
-      count: applications.length,
-      applications,
-      ...(fromCache && { fromCache }),
+      count: paged.length,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+      applications: paged,
     });
   },
 );
@@ -376,45 +451,63 @@ export const updateJobApplication = TryCatch(
       );
     }
 
-    const updated = await prisma.application.update({
-      where: { application_id },
-      data: { status: status as any },
-      select: {
-        application_id: true,
-        job_id: true,
-        applicant_id: true,
-        applicant_email: true,
-        status: true,
-        applied_at: true,
-        subscribed: true,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.application.update({
+        where: { application_id },
+        data: { status: status as any },
+        select: {
+          application_id: true,
+          job_id: true,
+          applicant_id: true,
+          applicant_email: true,
+          status: true,
+          applied_at: true,
+          subscribed: true,
+        },
+      });
+
+      await enqueueOutboxEvent(tx, {
+        eventId: newEventId(),
+        eventType: "application.status_mail",
+        eventVersion: 1,
+        topic: "send-mail",
+        partitionKey: applicantPartitionKey(application.applicant_id),
+        source: "job-service",
+        correlationId: getCorrelationId(),
+        payload: {
+          to: application.applicant_email,
+          subject: "Application Status Update",
+          html: applicationStatusTemplate({
+            applicantName: application.applicant_name,
+            jobTitle: application.job_title,
+            companyName: application.company_name,
+          }),
+        },
+      });
+
+      await enqueueOutboxEvent(tx, {
+        eventId: newEventId(),
+        eventType: "application.status_changed",
+        eventVersion: 1,
+        topic: "job-events",
+        partitionKey: jobPartitionKey(application.job_id),
+        source: "job-service",
+        correlationId: getCorrelationId(),
+        payload: {
+          type: "application.status_changed",
+          job_id: application.job_id,
+          application_id,
+          new_status: status,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      return result;
     });
 
-    kafka.publish("send-mail", {
-      to: application.applicant_email,
-      subject: "Application Status Update",
-      html: applicationStatusTemplate({
-        applicantName: application.applicant_name,
-        jobTitle: application.job_title,
-        companyName: application.company_name,
-      }),
-    }).catch((err) =>
-      console.error("[Kafka] Publish failed (non-fatal):", err),
-    );
-
-    kafka.publish("job-events", {
-      type: "application.status_changed",
-      job_id: application.job_id,
-      application_id,
-      new_status: status,
-      timestamp: new Date().toISOString(),
-    }).catch((err: unknown) =>
-      console.error("[Kafka] Failed to publish application.status_changed event:", err),
-    );
-
     try {
-      await redisClient.del(CACHE_KEYS.applicationsByJob(application.job_id));
-      await redisClient.del(CACHE_KEYS.applications(updated.applicant_id));
+      await invalidateByPattern(`${CACHE_KEYS.applicationsByJob(application.job_id)}*`);
+      await invalidateByPattern(`${CACHE_KEYS.applications(updated.applicant_id)}*`);
     } catch (err) {
       console.error("[Redis] Cache invalidation error (non-fatal):", err);
     }

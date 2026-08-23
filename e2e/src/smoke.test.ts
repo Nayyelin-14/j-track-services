@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { api } from "./client.ts";
 import { ENDPOINTS, type ServiceName } from "./config.ts";
-import { registerAndLogin } from "./helpers.ts";
+import { registerAndLogin, ensureResume } from "./helpers.ts";
 import { generateRecruiter, generateJobseeker, generateCompany, generateJob } from "./fixtures.ts";
 
 const userSvc: ServiceName = "user";
@@ -49,6 +49,7 @@ describe("Smoke: critical cross-service flow", () => {
 
     // 5. Register + login jobseeker (auth service)
     const jobseeker = await registerAndLogin(generateJobseeker());
+    await ensureResume(jobseeker);
     expect(jobseeker.cookies.has("accessToken")).toBe(true);
 
     // 6. Verify jobseeker JWT on user service too

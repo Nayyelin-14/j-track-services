@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
-import dotenv from "dotenv";
+import { loadEnv } from "./env";
 
-dotenv.config();
+loadEnv();
 
 if (!process.env.DB_URL) {
   throw new Error("DB_URL is not defined in environment variables");

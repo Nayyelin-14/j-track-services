@@ -1,4 +1,8 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import { resolve } from "node:path";
+
+dotenv.config({ path: resolve(process.cwd(), "../../.env") });
+
 import app, { errorMiddleware } from "./app.js";
 import routes from "./routes/upload.js";
 import aiRoutes from "./routes/ai.js";
@@ -34,16 +38,24 @@ app.use("/api/utils/ai", analyzeRoute);
 
 app.use(errorMiddleware);
 
-app.get("/health", async (_req, res) => {
+app.get("/health", (_req, res) => {
+  res.status(200).json({
+    service: "utils-service",
+    status: "ok",
+    uptime: process.uptime(),
+  });
+});
+
+app.get("/health/ready", async (_req, res) => {
   const [mailHealth, notifHealth] = await Promise.all([
     mailConsumer.healthCheck(),
     notificationConsumer.healthCheck(),
   ]);
-  const allConnected = mailHealth.connected && notifHealth.connected;
+  const ready = mailHealth.connected && notifHealth.connected;
 
-  res.status(allConnected ? 200 : 503).json({
+  res.status(ready ? 200 : 503).json({
     service: "utils-service",
-    status: allConnected ? "healthy" : "degraded",
+    status: ready ? "ready" : "not_ready",
     consumers: {
       mail: mailHealth,
       notification: notifHealth,

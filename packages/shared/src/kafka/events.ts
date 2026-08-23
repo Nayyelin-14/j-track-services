@@ -1,3 +1,5 @@
+import type { EventEnvelope } from "./envelope";
+
 export type JobEventType =
   | "job.viewed"
   | "job.applied"
@@ -29,3 +31,8 @@ export type JobEvent =
   | JobViewedEvent
   | JobAppliedEvent
   | ApplicationStatusChangedEvent;
+
+export type JobEventEnvelope = EventEnvelope<JobEvent>;
+export type JobViewedEnvelope = EventEnvelope<JobViewedEvent>;
+export type JobAppliedEnvelope = EventEnvelope<JobAppliedEvent>;
+export type ApplicationStatusChangedEnvelope = EventEnvelope<ApplicationStatusChangedEvent>;

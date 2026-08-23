@@ -5,17 +5,16 @@ import {
   validateResumeFile,
   MAX_PDF_SIZE_BYTES,
 } from "../validators/resume.js";
-import resumeService from "../services/resume.js";
+import resumeService, {
+  ResumeError,
+} from "../services/resume.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_PDF_SIZE_BYTES, files: 1 },
-  fileFilter: (_req, file, cb) => {
-    if (file.mimetype !== "application/pdf") {
-      return cb(new Error("Only PDF files are allowed"));
-    }
-    cb(null, true);
-  },
+  // NOTE: file type/size validation intentionally happens in-controller
+  // (validateResumeFile) so every rejection flows through the SSE error
+  // path instead of multer's plain-HTTP error handler.
 });
 
 export const uploadMiddleware = upload.single("resume");
@@ -32,54 +31,86 @@ export const analyzeResume = async (
   req: Request,
   res: Response,
 ): Promise<void> => {
-  const controller = new AbortController();
+  let terminalSent = false;
+
+  const sendTerminal = (event: Record<string, unknown>): void => {
+    if (terminalSent || res.writableEnded) return;
+    terminalSent = true;
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    res.end();
+  };
+
+  const abortController = new AbortController();
 
   setSSEHeaders(res);
 
-  req.on("close", () => {
+  // "close" on the RESPONSE fires when the client connection drops early.
+  // (req "close" also fires when a multipart body finishes streaming, which
+  // would falsely mark healthy requests as aborted.)
+  res.on("close", () => {
     if (!res.writableEnded) {
       console.info(`[SSE] Resume client disconnected: ${req.ip}`);
-      controller.abort();
+      abortController.abort();
     }
   });
 
   try {
     if (!req.file) {
-      res.write(
-        `data: ${JSON.stringify({ status: "error", message: "No PDF uploaded. Use field name: resume" })}\n\n`,
-      );
-      res.end();
+      sendTerminal({
+        status: "error",
+        code: "EMPTY_FILE",
+        message: "No PDF uploaded. Use field name: resume",
+      });
       return;
     }
 
-    validateResumeFile(req.file);
+    try {
+      validateResumeFile(req.file);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        sendTerminal({
+          status: "error",
+          code: "INVALID_FILE",
+          message: err.issues[0]?.message ?? "Invalid file",
+        });
+        return;
+      }
+      throw err;
+    }
 
     await resumeService.streamResumeAnalysis(
       req.file.buffer,
       res,
+      abortController.signal,
     );
   } catch (error) {
-    if (controller.signal.aborted) return;
+    const aborted = abortController.signal.aborted;
+    if (aborted) {
+      // Client is gone; upstream work is best-effort abandoned. Still make
+      // sure the socket reaches a terminal state.
+      sendTerminal({ status: "error", code: "ABORTED" });
+      return;
+    }
 
+    let code = "INTERNAL_ERROR";
     let message = "Unexpected error occurred";
     let errors: string[] | undefined;
 
-    if (error instanceof z.ZodError) {
+    if (error instanceof ResumeError) {
+      code = error.code;
+      message = error.message;
+    } else if (error instanceof z.ZodError) {
+      code = "VALIDATION_ERROR";
+      message = "Validation failed";
       errors = error.issues.map(
         (issue: z.ZodIssue) => `${issue.path.join(".")}: ${issue.message}`,
       );
-      message = "Validation failed";
-    } else if (error instanceof Error) {
-      message = error.message;
+    } else {
+      // Never leak parser/provider internals to the client.
+      console.error("[ResumeAnalyze] Unexpected error:", error);
     }
 
-    console.error("[ResumeAnalyze] Error:", message);
-
-    if (!res.writableEnded) {
-      res.write(
-        `data: ${JSON.stringify({ status: "error", message, ...(errors && { errors }) })}\n\n`,
-      );
-      res.end();
-    }
+    console.error("[ResumeAnalyze] Error:", code, message);
+    sendTerminal({ status: "error", code, message, ...(errors && { errors }) });
   }
 };

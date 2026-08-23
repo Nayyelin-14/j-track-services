@@ -20,7 +20,7 @@ export interface TestJob {
   job_type: string;
   work_location: string;
   openings: number;
-  salary: number;
+  salary: string | number;
 }
 
 export function uniqueEmail(base: string): string {
@@ -69,7 +69,7 @@ export function generateJob(overrides?: Partial<TestJob>): TestJob {
     job_type: "Full-time",
     work_location: "Remote",
     openings: 1,
-    salary: 100000,
+    salary: "100000",
     ...overrides,
   };
 }

@@ -1,87 +1,93 @@
-import { Kafka, Consumer } from "kafkajs";
-import type { KafkaHealth, ConsumerInstance } from "@jtrack/shared/kafka/types";
-import { resolveKafkaConfig, checkKafkaHealth } from "@jtrack/shared";
-import { createTransporter, sendWithRetry, publishToDLQ } from "./mail.js";
+import { createConsumer } from "@jtrack/shared/kafka/consumer-factory";
+import { prisma } from "@jtrack/shared/db";
+import {
+  isAlreadyProcessed,
+  markProcessed,
+} from "@jtrack/shared/kafka/idempotency";
+import { getMetrics } from "@jtrack/shared/kafka/metrics";
+import { createTransporter, sendWithRetry, mailDeliveryEnabled } from "./mail.js";
 
-export function createMailConsumer(): ConsumerInstance {
-  let consumer: Consumer | null = null;
-  let running = false;
+interface MailPayload {
+  to?: string;
+  subject?: string;
+  html?: string;
+  from?: string;
+}
 
-  return {
-    async start() {
-      if (running) return;
+const CONSUMER_ID = "mail-service";
 
-      const kafka = new Kafka(resolveKafkaConfig("mail-service"));
-      consumer = kafka.consumer({ groupId: process.env.KAFKA_CONSUMER_GROUP || "mail-service-group" });
+export function createMailConsumer() {
+  const transporter = createTransporter();
+  const maxRetries = Number(process.env.MAIL_SEND_RETRIES) || 3;
 
-      await consumer.connect();
-      await consumer.subscribe({
-        topic: process.env.KAFKA_MAIL_TOPIC || "send-mail",
-        fromBeginning: false,
+  return createConsumer({
+    clientId: "mail-service",
+    groupId: process.env.KAFKA_CONSUMER_GROUP || "mail-service-group",
+    consumerId: CONSUMER_ID,
+    topics: [process.env.KAFKA_MAIL_TOPIC || "send-mail"],
+    dlqTopic: process.env.KAFKA_DLQ_TOPIC || "send-mail-dlq",
+    shouldProcess: (envelope) => {
+      const payload = envelope.payload as MailPayload;
+      return Boolean(payload.to && payload.subject && payload.html);
+    },
+    handler: async (ctx) => {
+      const payload = ctx.envelope.payload as MailPayload;
+
+      // External effect (SMTP) cannot be transactional with the dedup row.
+      // Check-then-act: skip when already sent; mark only after the send
+      // succeeds. A crash between send and mark leads to a re-send on
+      // redelivery (at-least-once, accepted).
+      if (await isAlreadyProcessed(prisma, CONSUMER_ID, ctx.envelope.eventId)) {
+        getMetrics(CONSUMER_ID).recordDeduped();
+        ctx.log("info", "Duplicate mail event skipped", {
+          eventId: ctx.envelope.eventId,
+          correlationId: ctx.envelope.correlationId,
+          to: payload.to,
+        });
+        return;
+      }
+
+      if (mailDeliveryEnabled()) {
+        await sendWithRetry(
+          transporter,
+          {
+            from: payload.from ?? process.env.MAIL_USER,
+            to: payload.to!,
+            subject: payload.subject!,
+            html: payload.html!,
+          },
+          "Mail",
+          maxRetries,
+        );
+      } else {
+        ctx.log("info", "Mail delivery disabled - preview only", {
+          to: payload.to,
+          subject: payload.subject,
+        });
+      }
+
+      // Mark as processed regardless: in preview mode the "send" is a log, and
+      // in real mode the send already succeeded (otherwise an exception was
+      // thrown and we'd go through retry/DLQ). This prevents infinite
+      // redelivery in both environments.
+      await markProcessed(prisma, {
+        consumerId: CONSUMER_ID,
+        envelope: ctx.envelope,
+        partition: ctx.partition,
+        offset: ctx.offset,
       });
 
-      const transporter = createTransporter();
-      const dlqTopic = process.env.KAFKA_DLQ_TOPIC || "send-mail-dlq";
-      const maxRetries = Number(process.env.MAIL_SEND_RETRIES) || 3;
-
-      running = true;
-      console.log(`[Mail Consumer] Started, listening on "${process.env.KAFKA_MAIL_TOPIC || "send-mail"}"`);
-
-      await consumer.run({
-        eachMessage: async ({ message }) => {
-          const rawValue = message.value?.toString();
-          if (!rawValue) {
-            console.warn("[Mail Consumer] Received empty message, skipping");
-            return;
-          }
-
-          let parsed: { to?: string; subject?: string; html?: string };
-          try {
-            parsed = JSON.parse(rawValue);
-          } catch {
-            console.error("[Mail Consumer] Invalid JSON message, publishing to DLQ");
-            await publishToDLQ(kafka, dlqTopic, rawValue, "parse_error");
-            return;
-          }
-
-          if (!parsed.to || !parsed.subject || !parsed.html) {
-            console.error("[Mail Consumer] Missing required fields, publishing to DLQ", parsed);
-            await publishToDLQ(kafka, dlqTopic, rawValue, "missing_fields");
-            return;
-          }
-
-          try {
-            await sendWithRetry(transporter, {
-              from: process.env.MAIL_USER,
-              to: parsed.to,
-              subject: parsed.subject,
-              html: parsed.html,
-            }, "Mail", maxRetries);
-            console.log(`[Mail] Sent to ${parsed.to}`);
-          } catch {
-            console.error(`[Mail] All attempts failed for ${parsed.to}, publishing to DLQ`);
-            await publishToDLQ(kafka, dlqTopic, rawValue, "send_failed");
-          }
-        },
+      ctx.log("info", "Mail processed", {
+        eventId: ctx.envelope.eventId,
+        correlationId: ctx.envelope.correlationId,
+        to: payload.to,
       });
     },
-
-    async stop() {
-      if (!running || !consumer) return;
-      running = false;
-      console.log("[Mail Consumer] Stopping...");
-      await consumer.stop();
-      await consumer.disconnect();
-      consumer = null;
-      console.log("[Mail Consumer] Stopped");
+    log: (level, msg, meta) => {
+      const prefix = "[Mail Consumer]";
+      if (level === "error") console.error(prefix, msg, meta ?? {});
+      else if (level === "warn") console.warn(prefix, msg, meta ?? {});
+      else console.log(prefix, msg, meta ?? {});
     },
-
-    isRunning(): boolean {
-      return running;
-    },
-
-    healthCheck(): Promise<KafkaHealth> {
-      return checkKafkaHealth("mail-service", consumer !== null && running);
-    },
-  };
+  });
 }

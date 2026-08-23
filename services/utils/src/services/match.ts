@@ -1,7 +1,10 @@
 import { Response } from "express";
-import GroqConfig from "../config/groq.js";
+import AIConfig from "../config/ai.js";
 import { prepareResumeText } from "../config/prompts.js";
+import { buildModelChain, extractJson, validateRequestedModel } from "./nim-models.js";
+import { runNimStream, type NimMessage, type StreamOutcome } from "./nim-stream.js";
 import { PDFParse } from "pdf-parse";
+
 const writeSSE = (res: Response, data: object): void => {
   if (!res.writableEnded) {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -11,7 +14,7 @@ const writeSSE = (res: Response, data: object): void => {
 export interface JobDetails {
   title: string;
   description: string;
-  salary: number | null | undefined;
+  salary: number | string | null | undefined;
   location: string | undefined;
   job_type: string | undefined;
   work_location: string | undefined;
@@ -38,10 +41,25 @@ export interface JobDetails {
   } | null;
 }
 
-const matchPrompt = (resumeText: string, job: JobDetails): string => {
+/** Recruiter instructions live in a proper system message so models that
+ * reject the system role can be detected and worked around (see below). */
+const MATCH_SYSTEM_PROMPT = [
+  "You are an expert technical recruiter with 15+ years of experience.",
+  "Analyze how well the given resume matches the job posting.",
+  "Respond with ONLY valid JSON, no markdown, no code blocks, no extra text:",
+  "{",
+  '  "matchScore": number,',
+  '  "strengths": string[],',
+  '  "gaps": string[],',
+  '  "recommendation": "yes" | "maybe" | "no",',
+  '  "recommendationReason": string,',
+  '  "summary": string,',
+  '  "fullAnalysis": string',
+  "}",
+].join("\n");
+
+const matchUserPrompt = (resumeText: string, job: JobDetails): string => {
   const parts: string[] = [
-    "You are an expert technical recruiter with 15+ years of experience. Analyze how well the given resume matches the job posting.",
-    "",
     "RESUME TEXT:",
     `"""`,
     resumeText,
@@ -88,17 +106,6 @@ const matchPrompt = (resumeText: string, job: JobDetails): string => {
     "5. A brief summary of the analysis",
     "6. Full analysis in natural language",
     "",
-    "Respond in valid JSON format:",
-    "{",
-    '  "matchScore": number,',
-    '  "strengths": string[],',
-    '  "gaps": string[],',
-    '  "recommendation": "yes" | "maybe" | "no",',
-    '  "recommendationReason": string,',
-    '  "summary": string,',
-    '  "fullAnalysis": string',
-    "}",
-    "",
     "Return ONLY the JSON. No markdown, no code blocks, no extra text.",
   );
 
@@ -130,7 +137,7 @@ class MatchService {
     ) {
       const { text: fullText } = await new PDFParse({ data: buffer }).getText();
 
-      if (!fullText || fullText.length < 50) {
+      if (!fullText || fullText.length < 10) {
         throw new Error("Resume PDF is empty or unreadable");
       }
 
@@ -145,6 +152,7 @@ class MatchService {
     job: JobDetails,
     res: Response,
     signal: AbortSignal,
+    requestedModel?: string,
   ): Promise<void> {
     writeSSE(res, {
       status: "progress",
@@ -154,37 +162,83 @@ class MatchService {
 
     const resumeText = await this.downloadAndParseResume(resumeUrl, signal);
 
+    // Validate the override against the discovered catalog before executing.
+    const validation = await validateRequestedModel(requestedModel);
+    let firstChoice = requestedModel;
+    if (!validation.valid) {
+      firstChoice = undefined;
+      writeSSE(res, {
+        status: "model_fallback",
+        requested_model: requestedModel,
+        used_model: AIConfig.getFallbackModel(),
+        reason: "invalid_model",
+        message: `The selected model is not available. Using ${AIConfig.getFallbackModel()} instead.`,
+      });
+    }
+
+    // Execution chain: requested → default → remaining recommended, deduped.
+    const chain = buildModelChain(firstChoice);
+
     writeSSE(res, {
       status: "progress",
       stage: "analyze",
-      message: "Analyzing match with Groq AI",
+      message: `Analyzing match with NVIDIA NIM (${chain[0]})`,
     });
 
-    const ai = GroqConfig.getInstance();
+    const messages: NimMessage[] = [
+      { role: "system", content: MATCH_SYSTEM_PROMPT },
+      { role: "user", content: matchUserPrompt(resumeText, job) },
+    ];
 
-    const stream = await ai.chat.completions.create({
-      model: GroqConfig.getModel(),
-      messages: [{ role: "user", content: matchPrompt(resumeText, job) }],
-      max_tokens: 2048,
-      temperature: 0.3,
-      stream: true,
-    });
+    // Walk the chain. Once ANY output has streamed to the client we must not
+    // switch models — retrying would duplicate or contradict shown content.
+    let anyOutputEmitted = false;
+    const onText = (text: string): void => {
+      anyOutputEmitted = true;
+      writeSSE(res, { status: "chunk", text });
+    };
 
-    let fullAnalysis = "";
-    for await (const chunk of stream) {
-      if (signal.aborted) return;
+    let outcome: StreamOutcome | null = null;
+    let usedModel = chain[0]!;
+    let lastError: unknown = null;
 
-      const text = chunk.choices[0]?.delta?.content || "";
-      if (text) {
-        fullAnalysis += text;
-        writeSSE(res, { status: "chunk", text });
+    for (let i = 0; i < chain.length; i++) {
+      const candidate = chain[i]!;
+      usedModel = candidate;
+      try {
+        outcome = await runNimStream(candidate, messages, signal, onText);
+        break;
+      } catch (err) {
+        lastError = err;
+        if (signal.aborted) return;
+        if (anyOutputEmitted) throw err; // never switch mid-stream
+        const isLast = i === chain.length - 1;
+        if (!isLast) {
+          const next = chain[i + 1]!;
+          writeSSE(res, {
+            status: "model_fallback",
+            requested_model: candidate,
+            used_model: next,
+            reason: "runtime_failure",
+            message: `${candidate} failed during analysis. Retrying with ${next}.`,
+          });
+        }
       }
     }
 
-    const parsed = this.parseAIResponse(fullAnalysis);
+    if (!outcome) {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("All models in the fallback chain failed");
+    }
+
+    const parsed = this.parseAIResponse(outcome.text);
 
     writeSSE(res, {
       status: "complete",
+      model_used: usedModel,
+      usage: outcome.usage,
+      latency_ms: outcome.latencyMs,
       result: {
         matchScore:
           typeof parsed.matchScore === "number" ? parsed.matchScore : 0,
@@ -197,17 +251,20 @@ class MatchService {
           : "maybe",
         recommendationReason: parsed.recommendationReason || "",
         summary: parsed.summary || "",
-        fullAnalysis: parsed.fullAnalysis || fullAnalysis,
+        fullAnalysis: parsed.fullAnalysis || outcome.text,
       },
     });
   }
 
-  private parseAIResponse(rawText: string): Record<string, unknown> {
+  parseAIResponse(rawText: string): Record<string, unknown> {
+    const direct = extractJson(rawText);
+    if (direct && typeof direct === "object") {
+      return direct as Record<string, unknown>;
+    }
     const cleaned = rawText
       .replace(/```json\s*/gi, "")
       .replace(/```\s*/g, "")
       .trim();
-
     try {
       return JSON.parse(cleaned);
     } catch {
