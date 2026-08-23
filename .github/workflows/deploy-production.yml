@@ -30,6 +30,10 @@ on:
         description: "utils → new Git SHA (blank = leave unchanged)"
         required: false
         default: ""
+      FRONTEND_TAG:
+        description: "frontend → new Git SHA from the jtrack repo (blank = leave unchanged)"
+        required: false
+        default: ""
       allow_shared_partial:
         description: "Override the coordinated-release guard for shared/dep changes"
         required: false
@@ -79,6 +83,7 @@ jobs:
           USER_TAG: ${{ inputs.USER_TAG }}
           JOBSERVICE_TAG: ${{ inputs.JOBSERVICE_TAG }}
           UTILS_TAG: ${{ inputs.UTILS_TAG }}
+          FRONTEND_TAG: ${{ inputs.FRONTEND_TAG }}
           SHOW_CURRENT: ${{ inputs.show_current }}
         run: |
           set -euo pipefail
@@ -97,6 +102,13 @@ jobs:
           add user        "$USER_TAG"
           add jobservice  "$JOBSERVICE_TAG"
           add utils       "$UTILS_TAG"
+          # frontend SHAs come from the jtrack repo — this workflow cannot
+          # resolve short SHAs against that repo, so require the full SHA
+          if [ -n "$FRONTEND_TAG" ] && ! [[ "$FRONTEND_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::FRONTEND_TAG must be the full 40-character commit SHA from the jtrack repo" >&2
+            exit 1
+          fi
+          add frontend    "$FRONTEND_TAG"
 
           count=$(wc -l < selected.txt)
           if [[ "$count" -eq 0 && "$SHOW_CURRENT" != "true" ]]; then
@@ -115,6 +127,11 @@ jobs:
           set -euo pipefail
           : > resolved.txt
           while read -r svc sha; do
+            if [ "$svc" = "frontend" ]; then
+              # jtrack-repo SHA: already required to be full-length
+              echo "$svc $sha" >> resolved.txt
+              continue
+            fi
             full=$(gh api "repos/${{ github.repository }}/commits/$sha" --jq .sha)
             echo "$svc $full" >> resolved.txt
             echo "$svc: $sha → $full"
@@ -127,21 +144,24 @@ jobs:
           ALLOW_PARTIAL: ${{ inputs.allow_shared_partial }}
         run: |
           set -euo pipefail
-          selected_count=$(wc -l < resolved.txt)
+          # Only the four BACKEND services consume packages/shared; frontend
+          # is an independent release.
+          backend_count=$(grep -cv '^frontend ' resolved.txt || true)
 
           for svc_sha in $(cat resolved.txt); do
             svc="${svc_sha%% *}"
             sha="${svc_sha##* }"
+            [ "$svc" = "frontend" ] && continue
             hits=$(gh api "repos/${{ github.repository }}/commits/$sha" --jq '.files[].filename' \
               | grep -E "$DEPENDENCY_AFFECTING" || true)
-            if [[ -z "$hits" ]] || [[ "$selected_count" -ge 4 ]]; then
+            if [[ -z "$hits" ]] || [[ "$backend_count" -ge 4 ]]; then
               continue
             fi
             if [[ "$ALLOW_PARTIAL" != "true" ]]; then
               echo "::error::$sha changed dependency-affecting files:" >&2
               echo "$hits" >&2
-              echo "This requires a COORDINATED release of all four services." >&2
-              echo "Select all four tags, or set allow_shared_partial=true to override." >&2
+              echo "This requires a COORDINATED release of all four backend services." >&2
+              echo "Select all four backend tags, or set allow_shared_partial=true to override." >&2
               exit 1
             fi
             echo "::warning::$svc=$sha affects shared code; partial deploy forced via override."
