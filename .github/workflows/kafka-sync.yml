@@ -54,18 +54,13 @@ jobs:
           set -euo pipefail
           cd /opt/jtrack
           BROKER="$1"; NUSER="$2"; NPASS="$3"; NMECH="$4"
-          CUR_USER=$(grep "^KAFKA_SASL_USERNAME=" .env | cut -d= -f2-)
-          if [ "$CUR_USER" = "$NUSER" ]; then
-            echo "VM_KAFKA=SAME (username matches; password not compared)"
-          else
-            cp .env ".env.bak.kafka.$(date +%s)"
-            sed -i "s|^KAFKA_BROKER=.*|KAFKA_BROKER=${BROKER}|" .env
-            sed -i "s|^KAFKA_SASL_USERNAME=.*|KAFKA_SASL_USERNAME=${NUSER}|" .env
-            sed -i "s|^KAFKA_SASL_PASSWORD=.*|KAFKA_SASL_PASSWORD=${NPASS}|" .env
-            sed -i "s|^KAFKA_SASL_MECHANISM=.*|KAFKA_SASL_MECHANISM=${NMECH}|" .env
-            echo "VM_KAFKA=UPDATED"
-            docker compose --env-file versions.env up -d --force-recreate auth user jobservice utils
-          fi
+          cp .env ".env.bak.kafka.$(date +%s)"
+          sed -i "s|^KAFKA_BROKER=.*|KAFKA_BROKER=${BROKER}|" .env
+          sed -i "s|^KAFKA_SASL_USERNAME=.*|KAFKA_SASL_USERNAME=${NUSER}|" .env
+          sed -i "s|^KAFKA_SASL_PASSWORD=.*|KAFKA_SASL_PASSWORD=${NPASS}|" .env
+          sed -i "s|^KAFKA_SASL_MECHANISM=.*|KAFKA_SASL_MECHANISM=${NMECH}|" .env
+          echo "VM_KAFKA=UPDATED"
+          docker compose --env-file versions.env up -d --force-recreate auth user jobservice utils
           REMOTE
           rm -f key
 
